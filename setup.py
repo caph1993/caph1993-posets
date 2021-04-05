@@ -9,14 +9,13 @@ twine upload dist/*
 
 setup(
     name='caph1993-posets',
-    version='0.2.0',
+    version='0.3.0',
     description='Toolbox for finite posets and lattices',
     url='https://github.com/caph1993/caph1993-posets',
     author='Carlos Pinzón',
     author_email='caph1993@gmail.com',
     license='MIT',
     packages=[
-        'poset',
     	'cp93posets',
     ],
     install_requires=[

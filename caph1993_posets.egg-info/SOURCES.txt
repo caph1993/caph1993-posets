@@ -5,7 +5,4 @@ caph1993_posets.egg-info/dependency_links.txt
 caph1993_posets.egg-info/requires.txt
 caph1993_posets.egg-info/top_level.txt
 cp93posets/__init__.py
-cp93posets/dynamic_class.py
 cp93posets/poset.py
-poset/__init__.py
-poset/poset.py
