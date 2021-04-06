@@ -150,7 +150,7 @@ class Poset:
         if f is not None:
             n = self.n
             if as_edges:
-                extra_edges = [(i,f[i]) for i in range(n)]
+                extra_edges = [(i,int(f[i])) for i in range(n)]
             else:
                 gr = [[] for i in range(n)]
                 for i in range(n):
@@ -176,7 +176,7 @@ class Poset:
                     g.add_edge(Edge(i,j))
         if extra_edges is not None:
             for i,j in extra_edges:
-                style = {'color':'blue'}
+                style = {'color':'blue', 'constraint':'false'}
                 g.add_edge(Edge(i, j, **style))
         return g
     
