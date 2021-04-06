@@ -115,7 +115,11 @@ class Poset:
         Pstr = lambda i: ','.join(map(str,P[i]))
         it = (f'{i}<{Pstr(i)}' for i in topo if P[i])
         name = ' : '.join((f'{n}', *it))
-        return f'P({name})'
+        labels = ''
+        if self.labels!=tuple(range(n)):
+            labels = ', '.join(self.labels)
+            labels = f' with labels {labels}'
+        return f'P({name}){labels}'
 
     def __repr__(self):
         return self.name
@@ -561,6 +565,10 @@ class Poset:
             out_labels = tuple(out_labels)
         return self.__class__(out, labels=out_labels)
 
+    def relabel(self, labels=None):
+        'copy of self with different labels'
+        return self.__class__(self.leq, labels=labels)
+
     @cached_property
     def canonical_labeled(self):
         'representant of the equivalence class of self under reindex relation'
@@ -568,7 +576,8 @@ class Poset:
 
     @cached_property
     def canonical(self):
-        'representant of the equivalence class of self under reindex/relabel relation'
+        '''representant of the class of self under reindex/relabel relation.
+        same as self.canonical_labeled.relabel()'''
         return self.reindex(self.canonical_index, reset_labels=True)
     
     @cached_property
