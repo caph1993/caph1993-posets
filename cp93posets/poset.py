@@ -4,7 +4,7 @@ import numpy as np
 from collections import deque
 from itertools import product, chain
 from functools import reduce
-import time, sys
+import time, sys, inspect
 import re
 
 
@@ -65,47 +65,12 @@ class PosetException(Exception):
 class Poset:
     """
     Hashable object that represents an inmutable finite partial order.
-    Hash is invariant under permutations.
-    
-    Requires external packages:
-        - numpy
-        - cached_property
-        - pyhash
-        - pydotplus (which needs graphviz 'dot' program)
-    
+    Uses a matrix and hashing is invariant under permutations.
+
     The main attributes (always present) are:
         - n: size of the poset. The elements of the poset are range(n)
         - leq: read only (inmutable) boolean nxn matrix. leq[i,j]==True iff i <= j
         - labels: tuple of n strings. Only used for displaying
-
-    All other attributes are lazy loaded and usually cached.
-    
-    Conventions:
-        - child[i,j]==True iff j covers i (with no elements inbetween)
-        - children[j] = [i for i in range(n) if leq[i,j]]
-        - parents[i] = [j for j in range(n) if leq[i,j]]
-
-        For lattices:
-            - lub[i,j] is the least upper bound for i and j.
-            - glb[i,j] is the greatest lower bound for i and j
-    
-    Why pyhash?
-        Because it is stable (like hashlib) and fast (like hash).
-        hashlib is not adequate because it adds an unnecessary computation footrint.
-        hash(tuple(...)) is not adequate because it yields different results across
-        several runs unless PYTHONHASHSEED is set prior to execution.
-    
-    Example:
-        V = Poset.from_parents([[1,2],[],[],[1]])
-        V.show()
-        V = (V|Poset.total(1)).meta_O
-        V.show()
-        print(V.is_distributive)
-        print(V.num_f_lub_pairs)
-        for f in V.iter_f_lub_pairs_bruteforce():
-            V.show(f)
-            print(f)
-        V.meta_O.show()
     """
     
     def __init__(self, leq, labels=None):
@@ -122,7 +87,10 @@ class Poset:
         self.leq = leq
         self.labels = tuple(labels)
 
-    # Representation methods
+    '''
+    @section
+        Representation methods
+    '''
     
     @cached_property
     def child(self):
@@ -230,8 +198,10 @@ class Poset:
         child = self.child
         return [[j for j in range(n) if child[i,j]] for i in range(n)]
     
-    
-    # Interface methods
+    '''
+    @section
+        Interface methods
+    '''
     
     @classmethod
     def from_parents(cls, parents, labels=None):
@@ -325,7 +295,10 @@ class Poset:
         dist.flags.writeable = False
         return dist
     
-    # Graph structure methods
+    '''
+    @section
+        Graph structure methods
+    '''
     
     def subgraph(self, domain):
         n = self.n
@@ -497,8 +470,10 @@ class Poset:
         glb.flags.writeable = False
         return glb
     
-    
-    # Hashing and isomorphisms
+    '''
+    @section
+        Hashing and isomorphisms
+    '''
     
     _hasher = pyhash.xx_64(seed=0)
     @classmethod
@@ -587,6 +562,11 @@ class Poset:
     def canonical(self):
         'representant of the equivalence class of self under reindex relation'
         return self.reindex(self.canonical_index)
+
+    @cached_property
+    def enumerated(self):
+        'Poset equal to self but with default labels 0...n-1 in default order'
+        return self.cls(self.leq).canonical
     
     @cached_property
     def is_canonical(self):
@@ -632,8 +612,10 @@ class Poset:
         leq = self.reindex(rank).leq
         return self.__class__(leq, labels=None)
 
-    
-    # Methods for atomic changes (grow-by-one)
+    '''
+    @section
+        Methods for atomic changes (grow-by-one inductively)
+    '''
     
     @cached_property
     def forbidden_pairs(self):
@@ -706,7 +688,10 @@ class Poset:
         return list(cls.iter_all_latices(max_size))
     
     
-    # Methods for all endomorphisms
+    '''
+    @section
+        Methods for all endomorphisms
+    '''
     
     def iter_f_all(self):
         'all endomorphisms'
@@ -729,8 +714,10 @@ class Poset:
     def num_f_all_bottom(self):
         return self.n**(self.n-1)
     
-    
-    # Methods for all monotonic endomorphisms
+    '''
+    @section
+        Methods for all monotonic endomorphisms
+    '''
     
     def f_is_monotone(self, f, domain=None):
         'check if f is monotone over domain'
@@ -815,9 +802,11 @@ class Poset:
         domain = [i for i in range(self.n) if i!=self.bottom]
         yield from self.iter_f_monotone_restricted(domain=domain, _f=f)
     
-    
-    # Methods for monotonic endomorphisms over irreducibles
-        
+    '''
+    @section
+        Methods for monotonic endomorphisms over irreducibles
+    '''
+
     @cached_property
     def irreducible_components(self):
         'components of join irreducibles in toposort order and children lists for each component'
@@ -884,7 +873,10 @@ class Poset:
                 yield f
     
     
-    # Methods for endomorphisms that preserve lub
+    '''
+    @section
+        Methods for endomorphisms that preserve lub
+    '''
     
     def f_is_lub(self, f, domain=None):
         'check if f preserves lubs for sets:\n'
@@ -959,7 +951,10 @@ class Poset:
         return sum(1 for f in self.iter_f_lub())
     
     
-    # Optimizations for distributive lattices
+    '''
+    @section
+        Optimizations for distributive lattices
+    '''
     
     @cached_property
     def is_distributive(self):
@@ -1007,8 +1002,10 @@ class Poset:
         k_independent = [num(k) for k in range(m)]
         return reduce(lambda a,b: a*b, k_independent, 1)
     
-
-    # Methods for high level relatives of self 
+    '''
+    @section
+        Methods for high level (meta) relatives of self 
+    '''
 
     @cached_property
     def meta_J(self):
@@ -1109,7 +1106,10 @@ class Poset:
             return leq[j, i] and leq[fi, fj]
         return self.__class__.from_lambda(elems, f_leq, labels=labels)
 
-    # Constructors and operations between lattices
+    '''
+    @section
+        Constructors and operations between lattices
+    '''
     
     @classmethod
     def total(cls, n):
@@ -1263,10 +1263,10 @@ class Poset:
                 out = operation(out, self)
         return out
 
-
-    
-    
-    # Testing methods
+    '''
+    @section
+        Testing methods
+    '''
     
     def _test_iters_diff(self, it1, it2):
         '''Compute set1 = set(it1)-set(it2) and set2 = set(it2)-set(it1)
@@ -1391,7 +1391,10 @@ class Poset:
             self._test_counts(f1, f2)
     
     
-    # Methods for serialization
+    '''
+    @section
+        Methods for serialization
+    '''
     
     def to_literal(self, keys=None):
         '''Json serializable representation of self that also stores
@@ -1421,7 +1424,10 @@ class Poset:
             V.__dict__[key] = value
         return V
     
-    # Methods for interactive definition of other methods
+    '''
+    @section
+        Methods for interactive definition of other methods
+    '''
 
     @classmethod
     def set_method(cls, method):
@@ -1443,7 +1449,10 @@ class Poset:
         assert hasattr(method, '__call__'), f'Not callable method: {method}'
         setattr(cls, method.__name__, property(method))
 
-    # Methods related with entropy
+    '''
+    @section
+        Methods related with entropy
+    '''
 
     def count_antichains_bruteforce(self):
         return self.downset_closure.n
@@ -1466,8 +1475,107 @@ class Poset:
         E = [(f[b], f[a]) for a in sets for b in sets if a < b]
         return self.__class__.from_down_edges(len(sets), E)
 
+    '''
+    @section
+        Help and examples
+    '''
 
-    # Unclassified methods that will probably dissapear in the future
+    @classmethod
+    def help_index(cls, show_all=False, silent=False):
+        # Inspect the source code
+        src = inspect.getsource(cls)
+        re_sect = r'(?:\n *(@section(?:.|[ \n])+?)(?:\'\'\'|\"\"\"))'
+        re_meth = r'(?:def +(.*?\( *self.*?\)):)'
+        re_cmeth = r'(?:def +(.*?\( *cls.*?\)):)'
+        tokens = re.findall('|'.join((re_meth, re_cmeth, re_sect)), src)
+        
+        # Group sections and get docs when available
+        sections = []
+        methodsOf = {}
+        section = '(no section)'
+        for f, g, sec in tokens:
+            f = f or g
+            if f:
+                methodsOf[section] = methodsOf.get(section, [])
+                name = f[:f.index('(')]
+                if not hasattr(cls, name):
+                    continue
+                func = getattr(cls, name)
+                doc = func.__doc__ or ''
+                doc = '\n'.join(l.strip() for l in doc.split('\n'))
+                if isinstance(func, cached_property):
+                    full_f = f'@cached_property\ndef {f}:'
+                else:
+                    full_f = f'def {f}:'
+                methodsOf[section].append((full_f, doc))
+            else:
+                sections.append((section, methodsOf.get(section, [])))
+                section = sec.replace('@section','').strip()
+        sections.append((section, methodsOf.get(section, [])))
+        
+        # Write a readable output
+        out = []
+        for i, (sec, methods) in enumerate(sections):
+            out.append(f'\n@section {i}. {sec}\n\n')
+            for f, docs in methods:
+                underscore = f.startswith('def _') and not f.startswith('def __')
+                if show_all or not underscore or (not underscore and docs):
+                    f = '\n'.join(' '*4+s for s in f.split('\n'))
+                    docs = '\n'.join(' '*8+s for s in docs.split('\n'))
+                    out.append(f'{f}\n')
+                    out.append(f'{docs}\n')
+                    if docs.strip():
+                        out.append('\n')
+        out = ''.join(out)
+
+        return (sections, out) if silent else print(out)
+
+
+    def help_verbose(self):
+        return """
+        Except for n, leq and labels, all other attributes are
+        lazy loaded and usually cached.
+        
+        Conventions:
+            - child[i,j]==True iff j covers i (with no elements inbetween)
+            - children[j] = [i for i in range(n) if leq[i,j]]
+            - parents[i] = [j for j in range(n) if leq[i,j]]
+
+            For lattices:
+                - lub[i,j] is the least upper bound for i and j.
+                - glb[i,j] is the greatest lower bound for i and j
+        
+        Requires external packages:
+            - numpy
+            - cached_property
+            - pyhash
+            - pydotplus (which needs graphviz 'dot' program)
+
+        Why pyhash?
+            Because it is stable (like hashlib) and fast (like hash).
+            hashlib is not adequate because it adds an unnecessary computation footrint.
+            hash(tuple(...)) is not adequate because it yields different results across
+            several runs unless PYTHONHASHSEED is set prior to execution.
+        
+        Examples:
+
+        V = Poset.from_parents([[1,2],[],[],[1]])
+        V.show()
+        V = (V|Poset.total(1)).meta_O
+        V.show()
+        print(V.is_distributive)
+        print(V.num_f_lub_pairs)
+        for f in V.iter_f_lub_pairs_bruteforce():
+            V.show(f)
+            print(f)
+        V.meta_O.show()
+        """
+
+
+    '''
+    @section
+        Unclassified methods that will probably dissapear in the future
+    '''
     
     def decompose_series(self):
         n = self.n
