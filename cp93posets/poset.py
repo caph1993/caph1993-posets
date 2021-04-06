@@ -108,12 +108,12 @@ class Poset:
     
     @cached_property
     def name(self):
-        'Compact and readable representation of self based on covers'
+        'Compact and readable representation of self based on parents'
         n = self.n
-        C = self.children
+        P = self.parents
         topo = self.toposort
-        Cstr = lambda i: ','.join(map(str,C[i]))
-        it = (f'{i}>{Cstr(i)}' for i in topo if C[i])
+        Pstr = lambda i: ','.join(map(str,P[i]))
+        it = (f'{i}<{Pstr(i)}' for i in topo if P[i])
         name = ' : '.join((f'{n}', *it))
         return f'P({name})'
 
