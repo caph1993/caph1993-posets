@@ -553,12 +553,12 @@ class Poset:
                 out[f[i],f[j]] = leq[i,j]
         out.flags.writeable = False
         if reset_labels:
+            out_labels = None
+        else:
             out_labels = [None for i in range(n)]
             for i in range(n):
                 out_labels[f[i]] = self.labels[i]
             out_labels = tuple(out_labels)
-        else:
-            out_labels = None
         return self.__class__(out, labels=out_labels)
 
     @cached_property
