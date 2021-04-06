@@ -570,39 +570,8 @@ class Poset:
         return self.__class__(self.leq, labels=labels)
 
     @cached_property
-    def canonical_labeled(self):
-        'representant of the equivalence class of self under reindex relation'
-        return self.reindex(self.canonical_index)
-
-    @cached_property
     def canonical(self):
-        '''representant of the class of self under reindex/relabel relation.
-        same as self.canonical_labeled.relabel()'''
-        return self.reindex(self.canonical_index, reset_labels=True)
-    
-    @cached_property
-    def is_canonical(self):
-        is_sorted = lambda l: all(a<=b for a,b in zip(l,l[1:]))
-        return is_sorted(self.canonical_index)
-    
-    @cached_property
-    def canonical_index(self):
-        'index that transforms self into the representant'
-        h = self.hash_elems
-        l = self.labels
-        return self._make_index(lambda i: (h[i], l[i], i))
-    
-    def _make_index(self, key):
-        n = self.n
-        g = sorted(range(n), key=key)
-        f = list(range(n))
-        for i in range(n):
-            f[g[i]] = i
-        return f
-
-    @cached_property
-    def enumerated(self):
-        'equivalent poset with simple enumerated labels and stable order'
+        'equivalent poset with enumerated labels and stable order'
         n = self.n
         group_by = {h:[] for h in range(n)}
         for i in range(n):
