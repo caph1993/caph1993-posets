@@ -536,7 +536,7 @@ class Poset:
         return next((f for f in remaining if is_isomorphism(f)), None)
     
     
-    def reindex(self, f, inverse=False):
+    def reindex(self, f, inverse=False, reset_labels=False):
         'Reindexed copy of self such that i is to self as f[i] to out'
         'If inverse==True, then f[i] is to self as i to out'
         n = self.n
@@ -552,21 +552,24 @@ class Poset:
             for j in range(n):
                 out[f[i],f[j]] = leq[i,j]
         out.flags.writeable = False
-        out_labels = [None for i in range(n)]
-        for i in range(n):
-            out_labels[f[i]] = self.labels[i]
-        out_labels = tuple(out_labels)
+        if reset_labels:
+            out_labels = [None for i in range(n)]
+            for i in range(n):
+                out_labels[f[i]] = self.labels[i]
+            out_labels = tuple(out_labels)
+        else:
+            out_labels = None
         return self.__class__(out, labels=out_labels)
-    
+
     @cached_property
-    def canonical(self):
+    def canonical_labeled(self):
         'representant of the equivalence class of self under reindex relation'
         return self.reindex(self.canonical_index)
 
     @cached_property
-    def enumerated(self):
-        'Poset equal to self but with default labels 0...n-1 in default order'
-        return self.cls(self.leq).canonical
+    def canonical(self):
+        'representant of the equivalence class of self under reindex/relabel relation'
+        return self.reindex(self.canonical_index, reset_labels=True)
     
     @cached_property
     def is_canonical(self):
