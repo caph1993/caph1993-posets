@@ -127,7 +127,7 @@ class Poset:
     def show(self, f=None, as_edges=False, save=None, labels=None):
         'Use graphviz to display or save self (or the endomorphism f if given)'
         
-        g = self.graphviz(f, as_edges, labels)
+        g = self.graphviz(f, as_edges, labels, skip_bottom)
         png = g.create_png()
 
         if save is None:
@@ -149,12 +149,15 @@ class Poset:
             labels = self.labels
         if f is not None:
             n = self.n
+            skip_bottom = self.is_lattice and self.f_is_lub(f)
+            ok = lambda fi: fi!=0 or not skip_bottom
             if as_edges:
-                extra_edges = [(i,int(f[i])) for i in range(n)]
+                extra_edges = [(i,int(f[i])) for i in range(n) if ok(f[i])]
             else:
                 gr = [[] for i in range(n)]
                 for i in range(n):
-                    gr[f[i]].append(i)
+                    if ok(f[i]):
+                        gr[f[i]].append(i)
                 labels = [','.join(map(str,l)) for l in gr]
         return self._graphviz(labels, extra_edges)
     
@@ -173,7 +176,8 @@ class Poset:
         for i in range(n):
             for j in range(n):
                 if child[i,j]:
-                    g.add_edge(Edge(i,j))
+                    style = {'dir':'none', 'color':'#444444'}
+                    g.add_edge(Edge(i,j, **style))
         if extra_edges is not None:
             for i,j in extra_edges:
                 style = {'color':'blue', 'constraint':'false'}
@@ -380,6 +384,15 @@ class Poset:
             self.lub
             self.bottom
     
+    @cached_property
+    def is_lattice(self):
+        try:
+            self.assert_lattice
+        except PosetException:
+            return False
+        else:
+            return True
+
     @cached_property
     def lub(self):
         'matrix of i lub j, i.e. i join j'
