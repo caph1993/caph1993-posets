@@ -124,10 +124,16 @@ class Poset:
     def __repr__(self):
         return self.name
     
-    def show(self, f=None, as_edges=False, save=None, labels=None):
-        'Use graphviz to display or save self (or the endomorphism f if given)'
+    def show(self, f=None, method='auto', labels=None, save=None):
+        '''
+        Use graphviz to display or save self (or the endomorphism f if given)
+        method only affects visualization of f. Can be
+          - auto, labels, arrows, labels_bottom, arrows_bottom.
+        The suffix _bottom hides the visualization of f[i] when f[i]=bottom.
+        Default will enable _bottom if self is a lattice and f preserves lub.
+        '''
         
-        g = self.graphviz(f, as_edges, labels, skip_bottom)
+        g = self.graphviz(f, method, labels)
         png = g.create_png()
 
         if save is None:
@@ -140,18 +146,25 @@ class Poset:
                 f.write(png)
         return
 
-    def graphviz(self, f=None, as_edges=False, labels=None):
+    def graphviz(self, f=None, method='auto', labels=None):
         'Graphviz representation of self (or f if given)'
+        assert method in ('labels', 'arrows', 'labels_bottom', 'arrows_bottom'), (
+            f'Unknown method "{method}"'
+        )
+        if method=='auto' and f is not None:
+            if self.is_lattice and self.f_is_lub(f):
+                method = 'arrows_bottom'
+            else:
+                method = 'arrows'
         n = self.n
         child = self.child
         extra_edges = None
         if labels is None:
             labels = self.labels
         if f is not None:
-            n = self.n
-            skip_bottom = self.is_lattice and self.f_is_lub(f)
-            ok = lambda fi: fi!=0 or not skip_bottom
-            if as_edges:
+            enabled = not method.endswith('_bottom')
+            ok = lambda fi: fi != self.bottom or enabled
+            if method.startswith('arrows'):
                 extra_edges = [(i,int(f[i])) for i in range(n) if ok(f[i])]
             else:
                 gr = [[] for i in range(n)]
@@ -168,6 +181,8 @@ class Poset:
         from pydotplus import graph_from_edges
         from pydotplus.graphviz import Node, Edge
 
+        color = '#333333' if extra_edges is not None else '#666666'
+
         g = graph_from_edges([], directed=True)
         g.set_rankdir('BT')
         for i in range(n):
@@ -176,7 +191,7 @@ class Poset:
         for i in range(n):
             for j in range(n):
                 if child[i,j]:
-                    style = {'dir':'none', 'color':'#444444'}
+                    style = {'dir':'none', 'color':color}
                     g.add_edge(Edge(i,j, **style))
         if extra_edges is not None:
             for i,j in extra_edges:
