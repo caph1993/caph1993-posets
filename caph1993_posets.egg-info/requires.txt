@@ -1,4 +1,0 @@
-cached-property
-numpy
-pydotplus
-pyhash

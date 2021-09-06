@@ -1,1 +1,8 @@
-.ipynb_checkpoints
+# Ignore hidden files/folders except .gitignore files
+.*
+!/.gitignore
+# Ignore files/folders ending in ".ignore"
+*.ignore
+
+dist/
+*.egg-info
