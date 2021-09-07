@@ -1,5 +1,4 @@
 from setuptools import setup
-
 '''
 To upload:
 python3 setup.py check
@@ -9,14 +8,14 @@ twine upload dist/*
 
 setup(
     name='caph1993-posets',
-    version='2.0.1',
+    version='2.0.4',
     description='Toolbox for finite posets and lattices',
     url='https://github.com/caph1993/caph1993-posets',
     author='Carlos Pinzón',
     author_email='caph1993@gmail.com',
     license='MIT',
     packages=[
-    	'cp93posets',
+        'cp93posets',
     ],
     install_requires=[
         'numpy',

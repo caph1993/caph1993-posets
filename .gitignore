@@ -1,8 +1,10 @@
 # Ignore hidden files/folders except .gitignore files
 .*
 !/.gitignore
-# Ignore files/folders ending in ".ignore"
+# Ignore files/folders ending in ".ignore" or starting in "ignore."
 *.ignore
+ignore.*
 
 dist/
 *.egg-info
+__pycache__

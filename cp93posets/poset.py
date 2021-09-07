@@ -1,4 +1,4 @@
-from typing import Iterable, List, Mapping, Optional, Sequence, Set
+from typing import Iterable, List, Optional, Protocol, Sequence, Set
 from cp93pytools.methodtools import cached_property
 import pyhash
 import numpy as np
@@ -144,10 +144,17 @@ class Poset:
         png = g.create_png()  # type:ignore
 
         if save is None:
-            from IPython.display import display
-            from IPython.display import Image
-            img = Image(png)
-            display(img)
+            import builtins
+            if hasattr(builtins, '__IPYTHON__'):
+                from IPython.display import display
+                from IPython.display import Image
+                img = Image(png)
+                display(img)
+            else:
+                from io import BytesIO
+                from PIL import Image
+                img = Image.open(BytesIO(png))
+                img.show()
         else:
             with open(save, 'wb') as f:
                 f.write(png)
