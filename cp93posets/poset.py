@@ -8,66 +8,6 @@ from functools import reduce
 import time, sys, inspect
 import re
 
-_get_dtype_string = re.compile(
-    r'(<class \'numpy\.(.*)\'>)|(<class \'(.*?)\'>)|(.*)')
-
-
-def get_dtype_string(dtype):
-    'return the dtype string of a numpy dtype'
-    m = _get_dtype_string.match(str(dtype))
-    assert m
-    g = m.groups()
-    dtype_str: str = g[1] or g[3] or g[4]
-    np_dtype = np.dtype(dtype_str)  # type:ignore
-    assert dtype == np_dtype, (
-        f'Non invertible dtype: {dtype} != np.dtype(\'{dtype_str}\')')
-    return dtype_str
-
-
-def product_list(*iterables, repeat=1, out=None):
-    'same as itertools.product, but mutates the output instead of making tuples'
-    dims = [list(it) for it in iterables] * repeat
-    n = len(dims)
-    if out is not None:
-        assert len(out) == n, f'Incompatible output shape'
-    out = [None] * n if out is None else out
-
-    def backtrack(i):
-        if i == n:
-            yield out
-        else:
-            for x in dims[i]:
-                out[i] = x
-                yield from backtrack(i + 1)
-
-    yield from backtrack(0)
-
-
-class Outfile:
-    '''
-    Redirect stdout to a file inside statements like:
-    with Outfile(...):
-        print(...)
-    '''
-
-    def __init__(self, outfile=None):
-        self.outfile = outfile
-
-    def __enter__(self):
-        if self.outfile is not None:
-            self.initial_stdout = sys.stdout
-            sys.stdout = open(self.outfile, 'a')
-
-    def __exit__(self, *args):
-        if self.outfile is not None:
-            sys.stdout.close()
-            sys.stdout = self.initial_stdout
-
-
-class PosetException(Exception):
-    'Dummy exception for the poset class'
-    pass
-
 
 class Poset:
     """
@@ -214,13 +154,17 @@ class Poset:
                 g.add_edge(Edge(i, j, **style))
         return g
 
+    class Exception(Exception):
+        'Dummy exception for the poset class'
+        pass
+
     def throw(self, message):
         print(message)
         self.show()
         print('Covers:', self)
         print('Relation matrix:')
         print(self.leq.astype(int))
-        raise PosetException(message)
+        raise self.Exception(message)
 
     @cached_property
     def children(self):
@@ -418,8 +362,8 @@ class Poset:
     @cached_property
     def is_lattice(self):
         try:
-            self.assert_lattice
-        except PosetException:
+            self.assert_lattice()
+        except self.Exception:
             return False
         else:
             return True
@@ -1704,3 +1648,59 @@ class Poset:
         bot_top = A[self.bottom, self.top]
         middle = ((d == 2) * (bot[:, None] * top[None, :])).sum()
         return 2 * bot_top + (middle if self.n > 2 else 0)
+
+
+_get_dtype_string = re.compile(
+    r'(<class \'numpy\.(.*)\'>)|(<class \'(.*?)\'>)|(.*)')
+
+
+def get_dtype_string(dtype):
+    'return the dtype string of a numpy dtype'
+    m = _get_dtype_string.match(str(dtype))
+    assert m
+    g = m.groups()
+    dtype_str: str = g[1] or g[3] or g[4]
+    np_dtype = np.dtype(dtype_str)  # type:ignore
+    assert dtype == np_dtype, (
+        f'Non invertible dtype: {dtype} != np.dtype(\'{dtype_str}\')')
+    return dtype_str
+
+
+def product_list(*iterables, repeat=1, out=None):
+    'same as itertools.product, but mutates the output instead of making tuples'
+    dims = [list(it) for it in iterables] * repeat
+    n = len(dims)
+    if out is not None:
+        assert len(out) == n, f'Incompatible output shape'
+    out = [None] * n if out is None else out
+
+    def backtrack(i):
+        if i == n:
+            yield out
+        else:
+            for x in dims[i]:
+                out[i] = x
+                yield from backtrack(i + 1)
+
+    yield from backtrack(0)
+
+
+class Outfile:
+    '''
+    Redirect stdout to a file inside statements like:
+    with Outfile(...):
+        print(...)
+    '''
+
+    def __init__(self, outfile=None):
+        self.outfile = outfile
+
+    def __enter__(self):
+        if self.outfile is not None:
+            self.initial_stdout = sys.stdout
+            sys.stdout = open(self.outfile, 'a')
+
+    def __exit__(self, *args):
+        if self.outfile is not None:
+            sys.stdout.close()
+            sys.stdout = self.initial_stdout
