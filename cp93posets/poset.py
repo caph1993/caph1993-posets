@@ -312,6 +312,7 @@ class Poset(HelpIndex, WBools):
         leq[np.diag_indices_from(leq)] = True
         for des, anc in edges:
             leq[des, anc] = True
+        leq.flags.writeable = False
         closure = Relation(leq).transitive_closure()
         return cls(closure.rel, _validate=True)
 
