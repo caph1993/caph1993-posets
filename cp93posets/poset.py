@@ -73,27 +73,26 @@ class Relation(HelpIndex, WBools):
     @cached_property
     def is_reflexive(self):
         rel = self.rel
-        I = np.where(~rel[np.diag_indices_from(rel)])
-        why = len(I) and f'Not reflexive: rel[{I[0]},{I[0]}] is False'
-        return self._wbool(not len(I), why)
+        I, = np.where(~rel[np.diag_indices_from(rel)])
+        why = I.size and f'Not reflexive: rel[{I[0]},{I[0]}] is False'
+        return self._wbool(not why, why)
 
     @cached_property
     def is_antisymmetric(self):
         rel = self.rel
         eye = np.identity(self.n, dtype=np.bool_)
-        I = np.where(rel & rel.T & ~eye)
-        why = len(I) and f'Not antisymmetric: cycle {I[0]}<={I[1]}<={I[0]}'
-        return self._wbool(not len(I), why)
+        I, J = np.where(rel & rel.T & ~eye)
+        why = I.size and f'Not antisymmetric: cycle {I[0]}<={I[1]}<={I[0]}'
+        return self._wbool(not why, why)
 
     @cached_property
     def is_transitive(self):
         rel = self.rel
         rel2 = np.matmul(rel, rel)
         I, J = np.where(((~rel) & rel2))
-        why = len(
-            I
-        ) and f'Not transitive: rel[{I[0]},{J[0]}] is False but there is a path'
-        return self._wbool(not len(I), why)
+        why = I.size and (
+            f'Not transitive: rel[{I[0]},{J[0]}] is False but there is a path')
+        return self._wbool(not why, why)
 
     @classmethod
     def validate(cls, rel: npBoolMatrix, expect_poset: bool = False):
@@ -113,9 +112,9 @@ class Relation(HelpIndex, WBools):
         G = [[] for _ in range(n)]
         for i in range(n):
             for j in range(n):
-                if rel[i, j]:
+                if rel[i, j] and i != j:
                     G[i].append(j)
-        return tarjan(G)
+        return Tarjan(G).tarjan()
 
     def transitive_closure(self):
         if self.is_transitive:
@@ -325,7 +324,7 @@ class Poset(HelpIndex, WBools):
             for j in range(m):
                 leq[i, j] = f_leq(elems[i], elems[j])
         leq.flags.writeable = False
-        return cls(leq, labels)
+        return cls(leq, labels, _validate=True)
 
     @cached_property
     def heights(self):
@@ -460,7 +459,7 @@ class Poset(HelpIndex, WBools):
             if not leq[x, glb]:
                 reason = f'Not a lattice: {i} glb {j} => {glb} or {x}'
                 return self._wbool(False, reason)
-        return self._wbool(True)
+        return self._wbool(False, 'Unknown reason')
 
     @cached_property
     def lub(self):
@@ -702,7 +701,7 @@ class Poset(HelpIndex, WBools):
         leq = self.leq
         new_leq = leq + np.matmul(leq[:, i:i + 1], leq[j:j + 1, :])
         new_leq.flags.writeable = False
-        obj = self.__class__(new_leq)
+        obj = self.__class__(new_leq, _validate=False)
         if not assume_poset:
             _ = obj.toposort
         return obj
@@ -1224,7 +1223,8 @@ class Poset(HelpIndex, WBools):
 
     def __invert__(self):
         'flip the poset upside down'
-        return self.__class__.from_children(self.parents, labels=self.labels)
+        cls = self.__class__
+        return cls.from_children(self.parents, labels=self.labels)
 
     def __add__(self, other):
         if isinstance(other, int):
@@ -1256,6 +1256,7 @@ class Poset(HelpIndex, WBools):
 
     def add_poset(self, other):
         'stack other above self and connect all self.tops with all other.bottoms'
+        cls = self.__class__
         n = self.n
         C = [
             *([j for j in Ci] for Ci in self.children),
@@ -1264,10 +1265,11 @@ class Poset(HelpIndex, WBools):
         for i in self.tops:
             for j in other.bottoms:
                 C[j + n].append(i)
-        return self.__class__.from_children(C)
+        return cls.from_children(C)
 
     def mul_poset(self, other):
         'poset standard multiplication'
+        cls = self.__class__
         n = self.n
         m = other.n
         labels = [None] * (n * m)
@@ -1279,19 +1281,21 @@ class Poset(HelpIndex, WBools):
                 for k in other.children[j]:
                     G[i + j * n].append(i + k * n)
                 labels[i + j * n] = f'({self.labels[i]},{other.labels[j]})'
-        return self.__class__.from_children(G, labels=labels)
+        return cls.from_children(G, labels=labels)
 
     def or_poset(self, other):
         'put other at the right of self without connections'
+        cls = self.__class__
         n = self.n
         C = [
             *([j for j in Ci] for Ci in self.children),
             *([j + n for j in Ci] for Ci in other.children),
         ]
-        return self.__class__.from_children(C)
+        return cls.from_children(C)
 
     def and_poset(self, other):
         'stack other above self and put self.tops * other.bottoms inbetween'
+        cls = self.__class__
         n = self.n
         nodes = [
             *((-1, i) for i in self.non_tops),
@@ -1318,13 +1322,14 @@ class Poset(HelpIndex, WBools):
         for i, Ci in C.items():
             for j in Ci:
                 children[f[i]].append(f[j])
-        return self.__class__.from_children(children)
+        return cls.from_children(children)
 
     def add_number(self, n):
         'add self with itself n times'
         assert isinstance(n, int) and n >= 0, f'{n}'
+        cls = self.__class__
         if n == 0:
-            out = self.__class__.total(0)
+            out = cls.total(0)
         else:
             out = self._operation_number(lambda a, b: a + b, n)
         return out
@@ -1332,8 +1337,9 @@ class Poset(HelpIndex, WBools):
     def mul_number(self, n):
         'multiply self with itself n times'
         assert isinstance(n, int) and n >= 0, f'{n}'
+        cls = self.__class__
         if n == 0:
-            out = self.__class__.total(1)
+            out = cls.total(1)
         else:
             out = self._operation_number(lambda a, b: a * b, n)
         return out
@@ -1341,8 +1347,9 @@ class Poset(HelpIndex, WBools):
     def or_number(self, n):
         'OR operation of self with itself n times'
         assert isinstance(n, int) and n >= 0, f'{n}'
+        cls = self.__class__
         if n == 0:
-            out = self.__class__.total(0)
+            out = cls.total(0)
         else:
             out = self._operation_number(lambda a, b: a | b, n)
         return out
@@ -1350,8 +1357,9 @@ class Poset(HelpIndex, WBools):
     def and_number(self, n):
         'AND operation of self with itself n times'
         assert isinstance(n, int) and n >= 0, f'{n}'
+        cls = self.__class__
         if n == 0:
-            out = self.__class__.total(1)
+            out = cls.total(1)
         else:
             out = self._operation_number(lambda a, b: a & b, n)
         return out
@@ -1799,50 +1807,59 @@ def graphviz(
     return
 
 
-def tarjan(G):
-    n = len(G)
-    ext = [i for i in range(n)][::-1]
-    pa, vis, low = [-1] * n, [-1] * n, [-1] * n
-    stack, in_stack = [], [0] * n
-    u = t = 0
-    sccV, invV = [], [-1] * n
-    dfs = []
-    Q = [G[i][::-1] for i in range(n)]
-    while dfs or ext:
-        if not dfs:  # external loop
-            u = ext.pop()
-            if vis[u] == -1:
-                dfs.append(u)
-        elif vis[u] == -1:  # enter dfs
-            vis[u] = low[u] = t
-            t += 1
-            stack.append(u)
-            in_stack[u] = 1
-        elif Q[u]:  # middle of dfs
-            v = Q[u].pop()
-            dfs.append(u)
-            if vis[v] == -1:
-                pa[v] = u
-                dfs.append(v)
-            elif in_stack[v]:
-                low[u] = min(low[u], vis[v])
-        else:  # exit dfs
-            if pa[u] != -1:
-                low[pa[u]] = min(low[pa[u]], low[u])
-                low[pa[u]] = min(low[pa[u]], low[u])
-            if low[u] == vis[u]:
-                scc = []
-                while stack[-1] != u:
-                    scc.append(stack.pop())
-                scc.append(stack.pop())
-                j = len(sccV)
-                for x in scc:
-                    in_stack[x] = 0
-                    invV[x] = j
-                sccV.append(scc)
-    sccE = set()
-    for i in range(n):
+import sys
+
+sys.setrecursionlimit(10**6)
+
+
+class Tarjan(list):
+    vis: List[int]
+    low: List[int]
+    stack: List[int]
+    in_stack: List[int]
+    sccs: List[List[int]]
+    vis_cnt: int
+
+    def tarjan(self):
+        G = self
+        n = len(G)
+        G.vis, G.low = [-1] * n, [0] * n
+        G.stack, G.in_stack = [], [0] * n
+        G.vis_cnt = 0
+        G.sccs = []
+        for i in range(n):
+            if G.vis[i] == -1:
+                G.dfs(i)
+        invV = [-1] * n
+        for i, scc in enumerate(G.sccs):
+            for j in scc:
+                invV[j] = i
+        sccE = set()
+        for i in range(n):
+            for j in G[i]:
+                sccE.add((invV[i], invV[j]))
+        sccE = list(sccE)
+        return G.sccs, sccE
+
+    def dfs(self, i):
+        G = self
+        G.vis[i] = G.low[i] = G.vis_cnt
+        G.vis_cnt += 1
+        G.stack.append(i)
+        G.in_stack[i] = 1
         for j in G[i]:
-            sccE.add((invV[i], invV[j]))
-    sccE = list(sccE)
-    return sccV, sccE
+            if G.vis[j] == -1:
+                G.dfs(j)
+                G.low[i] = min(G.low[i], G.low[j])
+            elif G.in_stack[j]:
+                G.low[i] = min(G.low[i], G.vis[j])
+        if G.low[i] == G.vis[i]:
+            scc = []
+            s = G.stack
+            while s[-1] != i:
+                scc.append(s.pop())
+            scc.append(s.pop())
+            for x in scc:
+                G.in_stack[x] = 0
+            G.sccs.append(scc)
+        return
