@@ -1,12 +1,39 @@
-from typing import Iterable, List, Optional, Protocol, Sequence, Set
+from typing import Iterable, List, Optional, Protocol, Sequence, Set, Tuple, Union
 from cp93pytools.methodtools import cached_property
+from numpy.core.fromnumeric import nonzero
+from pydotplus.graphviz import Dot
+from .poset_exceptions import (
+    PosetExceptions,
+    NotLatticeException,
+)
 import pyhash
 import numpy as np
+import numpy.typing as npt
 from collections import deque
 from itertools import product, chain
 from functools import reduce
 import time, sys, inspect
 import re
+
+npBoolMatrix = npt.NDArray[np.bool_]
+
+
+class WhyBool:
+    'Boolean with optional explanation'
+
+    def __init__(self, value: bool, reason=None):
+        self.value = value
+        self.reason = reason
+
+    def __nonzero__(self):
+        return nonzero(self.value)
+
+    def assertion(self):
+        assert self, self.reason
+
+    def __str__(self):
+        suff = '' if not self.reason else f': {self.reason}'
+        return f'{self.value}{suff}'
 
 
 class Poset:
@@ -16,16 +43,21 @@ class Poset:
 
     The main attributes (always present) are:
         - n: size of the poset. The elements of the poset are range(n)
-        - leq: read only (inmutable) boolean nxn matrix. leq[i,j]==True iff i <= j
+        - leq: read only less-or-equal boolean nxn matrix:
+            leq[i,j]==True iff i <= j
         - labels: tuple of n strings. Only used for displaying
     """
 
-    def __init__(self, leq, labels: Sequence[str] = None):
-        'assumes that leq is indeeed a partial order'
+    def __init__(
+        self,
+        leq: npBoolMatrix,
+        labels: Sequence[str] = None,
+        assume_poset=True,
+    ):
         assert leq.dtype == bool, 'leq must be a boolean numpy array'
-        assert leq.flags.writeable == False, 'leq must be read-only'
+        assert leq.flags.writeable == False, 'leq must be read-only. Set leq.flags.writeable = False'
+        self.relation_assert_is_square(leq)
         n = leq.shape[0]
-        assert tuple(leq.shape) == (n, n), f'leq must be squared {leq.shape}'
         if labels is None:
             labels = tuple(f'{i}' for i in range(n))
         assert len(labels) == n, f'{len(labels)} labels found. Expected {n}'
@@ -33,21 +65,26 @@ class Poset:
         self.n = n
         self.leq = leq
         self.labels = tuple(labels)
+        if not assume_poset:
+            self.relation_assert_is_poset(leq)
 
     '''
     @section
         Representation methods
     '''
 
+    @property
+    def transitive_reduction(self):
+        return self.child
+
     @cached_property
     def child(self):
         'nxn boolean matrix. out[i,j] iff j covers i (with no elements inbetween)'
-        return self.__class__.leq_to_child(self.leq)
+        return self.__class__.leq_to_child(self.leq, assume_poset=True)
 
     @classmethod
-    def leq_to_child(cls, leq):
+    def leq_to_child(cls, leq: np.ndarray, assume_poset: bool):
         'Compute child (aka cover) relation from the poset relation'
-        n = len(leq)
         lt = leq.copy()
         lt[np.diag_indices_from(lt)] = False
         any_inbetween = np.matmul(lt, lt)
@@ -71,6 +108,19 @@ class Poset:
     def __repr__(self):
         return self.name
 
+    def describe(self):
+        self.show()
+        print('Relation matrix:')
+        print(self.leq.astype(int))
+        print('Covers:', self)
+        print(f'Lattice? {self.is_lattice}')
+        if self.is_lattice:
+            print(f'Distributive? {self.is_distributive}')
+        else:
+            print(f'# bottoms: {len(self.bottoms)}')
+            print(f'# tops: {len(self.tops)}')
+        return
+
     def show(self, f=None, method='auto', labels=None, save=None):
         '''
         Use graphviz to display or save self (or the endomorphism f if given)
@@ -80,7 +130,68 @@ class Poset:
         Default will enable _bottom if self is a lattice and f preserves lub.
         '''
 
-        g = self.graphviz(f, method, labels)
+        methods = ('auto', 'labels', 'arrows', 'labels_bottom', 'arrows_bottom')
+        assert method in methods, f'Unknown method "{method}"'
+
+        if method == 'auto' and f is not None:
+            if self.is_lattice and self.f_is_lub(f):
+                method = 'arrows_bottom'
+            else:
+                method = 'arrows'
+        n = self.n
+        child = self.child
+        blue_edges = None
+        if labels is None:
+            labels = self.labels
+        if f is not None:
+            enabled = not method.endswith('_bottom')
+            ok = lambda fi: enabled or fi != self.bottom
+            if method.startswith('arrows'):
+                blue_edges = [(i, int(f[i])) for i in range(n) if ok(f[i])]
+            else:
+                gr = [[] for _ in range(n)]
+                for i in range(n):
+                    if ok(f[i]):
+                        gr[f[i]].append(i)
+                labels = [','.join(map(str, l)) for l in gr]
+
+        edges = [(i, j) for i in range(n) for j in range(n) if child[i, j]]
+        self.__class__.graphviz(
+            n,
+            edges,
+            labels=labels,
+            blue_edges=blue_edges,
+            save=save,
+        )
+
+    @classmethod
+    def graphviz(
+        cls,
+        n: int,
+        edges: Sequence[Tuple[int, int]],
+        labels: Sequence[str],
+        blue_edges: Sequence[Tuple[int, int]] = None,
+        save: str = None,
+    ):
+        'Show graph using graphviz. blue edges are extra edges'
+        from pydotplus import graph_from_edges
+        from pydotplus.graphviz import Node, Edge
+
+        color = '#555555' if blue_edges is None else '#aaaaaa'
+
+        g = graph_from_edges([], directed=True)
+        g.set_rankdir('BT')  # type:ignore
+        for i in range(n):
+            style = {}
+            g.add_node(Node(i, label=f'"{labels[i]}"', **style))
+        for i, j in edges:
+            style = {'dir': 'none', 'color': color}
+            g.add_edge(Edge(i, j, **style))
+        if blue_edges is not None:
+            for i, j in blue_edges:
+                style = {'color': 'blue', 'constraint': 'false'}
+                g.add_edge(Edge(i, j, **style))
+
         png = g.create_png()  # type:ignore
 
         if save is None:
@@ -100,72 +211,6 @@ class Poset:
                 f.write(png)
         return
 
-    def graphviz(self, f=None, method='auto', labels=None):
-        'Graphviz representation of self (or f if given)'
-
-        methods = ('auto', 'labels', 'arrows', 'labels_bottom', 'arrows_bottom')
-        assert method in methods, f'Unknown method "{method}"'
-
-        if method == 'auto' and f is not None:
-            if self.is_lattice and self.f_is_lub(f):
-                method = 'arrows_bottom'
-            else:
-                method = 'arrows'
-        n = self.n
-        child = self.child
-        extra_edges = None
-        if labels is None:
-            labels = self.labels
-        if f is not None:
-            enabled = not method.endswith('_bottom')
-            ok = lambda fi: fi != self.bottom or enabled
-            if method.startswith('arrows'):
-                extra_edges = [(i, int(f[i])) for i in range(n) if ok(f[i])]
-            else:
-                gr = [[] for i in range(n)]
-                for i in range(n):
-                    if ok(f[i]):
-                        gr[f[i]].append(i)
-                labels = [','.join(map(str, l)) for l in gr]
-        return self._graphviz(labels, extra_edges)
-
-    def _graphviz(self, labels, extra_edges):
-        n = self.n
-        child = self.child
-
-        from pydotplus import graph_from_edges
-        from pydotplus.graphviz import Node, Edge
-
-        color = '#555555' if extra_edges is None else '#aaaaaa'
-
-        g = graph_from_edges([], directed=True)
-        g.set_rankdir('BT')  # type:ignore
-        for i in range(n):
-            style = {}
-            g.add_node(Node(i, label=f'"{labels[i]}"', **style))
-        for i in range(n):
-            for j in range(n):
-                if child[i, j]:
-                    style = {'dir': 'none', 'color': color}
-                    g.add_edge(Edge(i, j, **style))
-        if extra_edges is not None:
-            for i, j in extra_edges:
-                style = {'color': 'blue', 'constraint': 'false'}
-                g.add_edge(Edge(i, j, **style))
-        return g
-
-    class Exception(Exception):
-        'Dummy exception for the poset class'
-        pass
-
-    def throw(self, message):
-        print(message)
-        self.show()
-        print('Covers:', self)
-        print('Relation matrix:')
-        print(self.leq.astype(int))
-        raise self.Exception(message)
-
     @cached_property
     def children(self):
         '''(aka. covers): top-down adjoint list (j in G[i] iff i covers j)'''
@@ -179,6 +224,89 @@ class Poset:
         n = self.n
         child = self.child
         return [[j for j in range(n) if child[i, j]] for i in range(n)]
+
+    '''
+    @section
+        Methods for possibly non-poset relations
+    '''
+
+    @classmethod
+    def relation_assert_is_square(cls, rel: npBoolMatrix):
+        assert len(rel.shape), f'matrix must be squared {rel.shape}'
+        n = rel.shape[0]
+        assert tuple(rel.shape) == (n, n), f'matrix must be squared {rel.shape}'
+        return
+
+    @classmethod
+    def relation_assert_is_poset(cls, rel):
+        ok = cls.relation_is_poset(rel)
+        if not ok:
+            cls.relation_describe(rel)
+        ok.assertion()
+
+    @classmethod
+    def relation_is_poset(cls, rel):
+        "Check if the given relation is transitive, reflexive and antysimetric"
+        cls.relation_assert_is_square(rel)
+        return (cls.relation_is_reflexive(rel) and
+                cls.relation_is_antisymmetric(rel) and
+                cls.relation_is_transitive(rel))
+
+    @classmethod
+    def relation_is_reflexive(cls, rel: npBoolMatrix):
+        cls.relation_assert_is_square(rel)
+        I = np.where(~rel[np.diag_indices_from(rel)])
+        reason = I and f'Not reflexive: rel[{I[0]},{I[0]}] is False'
+        return WhyBool(not I, reason)
+
+    @classmethod
+    def relation_is_antisymmetric(cls, rel: npBoolMatrix):
+        cls.relation_assert_is_square(rel)
+        cycle = (rel & rel.T).sum() > len(rel)
+        reason = cycle and f'Not antisymmetric: cycle found'
+        return WhyBool(not cycle, reason)
+
+    @classmethod
+    def relation_is_transitive(cls, rel: npBoolMatrix):
+        cls.relation_assert_is_square(rel)
+        rel2 = np.matmul(rel, rel)
+        I, J = np.where(((~rel) & rel2))
+        reason = I and f'Not transitive: rel[{I[0]},{J[0]}] is False but there is a path'
+        return WhyBool(not I, reason)
+
+    @classmethod
+    def relation_describe(cls, rel: npBoolMatrix):
+        cls.relation_show(rel)
+        print('Relation matrix:')
+        print(rel.astype(int))
+        print('Reflexive?', cls.relation_is_reflexive(rel))
+        print('Antisymmetric?', cls.relation_is_antisymmetric(rel))
+        print('Transitive?', cls.relation_is_transitive(rel))
+        return
+
+    @classmethod
+    def relation_show(cls, rel: npBoolMatrix, labels=None, save=None):
+        'Display the relation using graphviz. Groups SCCs together'
+        if cls.relation_is_poset(rel):
+            return cls(rel).show(labels=labels, save=save)
+        scc_components, scc_edges = cls.relation_scc_reduction(rel)
+        N = rel.shape[0]
+        if labels is None:
+            labels = [f'{i}' for i in range(N)]
+        n = len(scc_components)
+        labels = ['-'.join(labels[i] for i in I) for I in scc_components]
+        return cls.graphviz(n, edges=scc_edges, labels=labels, save=save)
+
+    @classmethod
+    def relation_scc_reduction(cls, rel: npBoolMatrix):
+        cls.relation_assert_is_square(rel)
+        n = rel.shape[0]
+        G = [[] for i in range(n)]
+        for i in range(n):
+            for j in range(n):
+                if rel[i, j]:
+                    G[i].append(j)
+        return tarjan(G)
 
     '''
     @section
@@ -204,12 +332,11 @@ class Poset:
             for ch in children[pa]:
                 child[ch, pa] = True
         child.flags.writeable = False
-        dist = cls.child_to_dist(child)
+        dist = cls.child_to_dist(child, assume_poset=False)
         dist.flags.writeable = False
         leq = dist < n
         leq.flags.writeable = False
-        poset = cls(leq, labels)
-        poset.is_partial_order(leq) or poset.throw('Not a partial order')
+        poset = cls(leq, labels, assume_poset=False)
         poset.__dict__['child'] = child
         poset.__dict__['dist'] = dist
         return poset
@@ -226,7 +353,8 @@ class Poset:
         leq[np.diag_indices_from(leq)] = True
         for des, anc in edges:
             leq[des, anc] = True
-        leq = np.matmul(leq, leq)
+        if not cls.relation_is_poset(leq):
+            raise NotImplementedError('needs transitive closure')
         leq.flags.writeable = False
         return cls(leq)
 
@@ -241,18 +369,6 @@ class Poset:
         leq.flags.writeable = False
         return cls(leq, labels)
 
-    @classmethod
-    def is_partial_order(cls, rel):
-        "Check if the given relation is transitive, reflexive and antysimetric"
-        if not rel[np.diag_indices_from(rel)].all():
-            return False  # reflexivity
-        if (rel & rel.T).sum() > len(rel):
-            return False  # antysimmetry
-        rel2 = np.matmul(rel, rel)
-        if ((~rel) & rel2).any():
-            return False  # transitivity
-        return True
-
     @cached_property
     def heights(self):
         'Array of distance from i down to any bottom'
@@ -263,11 +379,12 @@ class Poset:
     @cached_property
     def dist(self):
         'Matrix of shortest distance from i upwards to j'
-        return self.__class__.child_to_dist(self.child)
+        return self.__class__.child_to_dist(self.child, assume_poset=True)
 
     @classmethod
-    def child_to_dist(cls, child):
+    def child_to_dist(cls, child, assume_poset=False):
         'Compute all pairs shortest distances using Floyd-Warshall algorithm'
+        # To do: take advantage of toposort if assume_poset==True
         dist = child.astype(np.uint64)
         n = len(dist)
         dist[dist == 0] = n
@@ -310,7 +427,9 @@ class Poset:
                 indeg[v] -= 1
                 if indeg[v] == 0:
                     q.append(v)
-        len(topo) == n or self.throw('There is a cycle')
+        ok = (len(topo) == n)
+        # Presupposition error
+        WhyBool(ok, not ok and f'Not antisymmetric, cycle found').assertion()
         return tuple(topo)
 
     @cached_property
@@ -356,17 +475,39 @@ class Poset:
 
     def assert_lattice(self):
         if self.n > 0:
-            self.lub
-            self.bottom
+            if not self.is_lattice:
+                self.describe()
+                self.is_lattice.assertion()
 
     @cached_property
     def is_lattice(self):
         try:
-            self.assert_lattice()
-        except self.Exception:
-            return False
-        else:
-            return True
+            self.lub
+            self.bottom
+            return WhyBool(True)
+        except NotLatticeException as e:
+            i, j = e.args
+        n = self.n
+        leq = self.leq
+        above = [k for k in range(n) if leq[i, k] and leq[j, k]]
+        below = [k for k in range(n) if leq[k, i] and leq[k, j]]
+        if not above:
+            reason = f'Not a lattice: {i} lub {j} => (no common ancestor)'
+            return WhyBool(False, reason)
+        if not below:
+            reason = f'Not a lattice: {i} glb {j} => (no common descendant)'
+            return WhyBool(False, reason)
+        lub = min(above, key=lambda k: sum(leq[:, k]))
+        glb = max(below, key=lambda k: sum(leq[:, k]))
+        for x in above:
+            if not leq[lub, x]:
+                reason = f'Not a lattice: {i} lub {j} => {lub} or {x}'
+                return WhyBool(False, reason)
+        for x in below:
+            if not leq[x, glb]:
+                reason = f'Not a lattice: {i} glb {j} => {glb} or {x}'
+                return WhyBool(False, reason)
+        return WhyBool(True)
 
     @cached_property
     def lub(self):
@@ -378,29 +519,12 @@ class Poset:
         for i in range(n):
             for j in range(n):
                 above = tuple(leq[i, :] & leq[j, :])
-                above in lub_id or self._throw_lattice(i, j)
+                if above not in lub_id:
+                    self._lub_issue = (i, j)
+                    raise NotLatticeException(args=(i, j))
                 lub[i, j] = lub_id[above]
         lub.flags.writeable = False
         return lub
-
-    def _throw_lattice(self, i, j):
-        'Throw explaining why self is not a lattice by looking at i and j'
-        n = self.n
-        leq = self.leq
-        above = [k for k in range(n) if leq[i, k] and leq[j, k]]
-        below = [k for k in range(n) if leq[k, i] and leq[k, j]]
-        above or self.throw(
-            f'Not a lattice: {i} lub {j} => (no common ancestor)')
-        below or self.throw(
-            f'Not a lattice: {i} glb {j} => (no common descendant)')
-        lub = min(above, key=lambda k: sum(leq[:, k]))
-        glb = max(below, key=lambda k: sum(leq[:, k]))
-        for x in above:
-            leq[lub,
-                x] or self.throw(f'Not a lattice: {i} lub {j} => {lub} or {x}')
-        for x in below:
-            leq[x, glb] or self.throw(
-                f'Not a lattice: {i} glb {j} => {glb} or {x}')
 
     @cached_property
     def bottoms(self):
@@ -430,20 +554,32 @@ class Poset:
         nleq = self.leq.sum(axis=0)
         return [i for i in range(n) if nleq[i] < n]
 
+    # @cached_property
+    # def has_unique_bottom(self):
+    #     unique = len(self.bottoms) == 1
+    #     reason = not unique and f'Multiple bottoms: {self.bottoms}'
+    #     return WhyBool(unique, reason)
+
     @cached_property
     def bottom(self):
         'unique bottom element of the Poset. Throws if not present'
         bottoms = self.bottoms
-        bottoms or self.throw(f'No bottom found')
-        len(bottoms) == 1 or self.throw(f'Multiple bottoms found: {bottoms}')
+        if not bottoms:
+            raise PosetExceptions.NoBottomsException()
+        if len(bottoms) > 1:
+            hook = lambda: f'Multiple bottoms found: {bottoms}'
+            raise PosetExceptions.NotUniqueBottomException(hook)
         return bottoms[0]
 
     @cached_property
     def top(self):
         'unique top element of the Poset. Throws if not present'
         tops = self.tops
-        tops or self.throw(f'No top found')
-        len(tops) == 1 or self.throw(f'Multiple tops found: {tops}')
+        if not tops:
+            raise PosetExceptions.NoTopsException()
+        if len(tops) > 1:
+            hook = lambda: f'Multiple tops found: {tops}'
+            raise PosetExceptions.NotUniqueTopException(hook)
         return tops[0]
 
     @cached_property
@@ -454,17 +590,8 @@ class Poset:
 
     @cached_property
     def glb(self):
-        n = self.n
         geq = self.leq.T
-        glb_id = {tuple(geq[i, :]): i for i in range(n)}
-        glb = np.zeros((n, n), int)
-        for i in range(n):
-            for j in range(n):
-                below = tuple(geq[i, :] & geq[j, :])
-                below in glb_id or self._throw_lattice(i, j)
-                glb[i, j] = glb_id[below]
-        glb.flags.writeable = False
-        return glb
+        return self.__class__(geq).lub
 
     '''
     @section
@@ -814,7 +941,7 @@ class Poset:
         'all monotone functions with f[bottom]=bottom'
         if not self.n:
             return
-        f = [None] * self.n
+        f: List[Optional[int]] = [None] * self.n
         f[self.bottom] = self.bottom
         domain = [i for i in range(self.n) if i != self.bottom]
         yield from self.iter_f_monotone_restricted(domain=domain, _f=f)
@@ -975,10 +1102,10 @@ class Poset:
 
     @cached_property
     def is_distributive(self):
-        return self._distributive_error is None
+        return self.explain_non_distributive is None
 
     @cached_property
-    def _distributive_error(self):
+    def explain_non_distributive(self):
         'Find i, j, k that violate distributivity. None otherwise'
         n = self.n
         lub = self.lub
@@ -996,7 +1123,9 @@ class Poset:
         return None
 
     def assert_distributive(self):
-        self.is_distributive or self.throw(self._distributive_error)
+        if not self.is_distributive:
+            hook = lambda: print(self.explain_non_distributive)
+            raise PosetExceptions.NotDistributiveException(hook)
 
     def iter_f_lub_distributive(self):
         'generate and interpolate all monotone functions over irreducibles'
@@ -1362,12 +1491,17 @@ class Poset:
               f'Elements found by method 2: {count[1]}\n'
               f'Same output: {same}\n')
         if not same:
-            self.throw(reason)
+            self.describe()
+            raise Exception(reason)
 
     def _test_assert_distributive(self):
-        self.is_distributive or self.throw(
-            f'The test can not be executed because the lattice is not distributive:\n'
-            f'{self._distributive_error}')
+        try:
+            self.assert_distributive()
+        except PosetExceptions.NotDistributiveException:
+            print(
+                'The test can not be executed because the lattice is not distributive'
+            )
+            raise
 
     def test_iter_f_monotone(self, outfile=None):
         it1 = map(tuple, self.iter_f_monotone())
@@ -1704,3 +1838,52 @@ class Outfile:
         if self.outfile is not None:
             sys.stdout.close()
             sys.stdout = self.initial_stdout
+
+
+def tarjan(G):
+    n = len(G)
+    ext = [i for i in range(n)][::-1]
+    pa, vis, low = [-1] * n, [-1] * n, [-1] * n
+    stack, in_stack = [], [0] * n
+    u = t = n_scc = 0
+    sccV, invV = [], [-1] * n
+    dfs = []
+    Q = [G[i][::-1] for i in range(n)]
+    while dfs or ext:
+        if not dfs:  # external loop
+            u = ext.pop()
+            if vis[u] == -1:
+                dfs.append(u)
+        elif vis[u] == -1:  # enter dfs
+            vis[u] = low[u] = t
+            t += 1
+            stack.append(u)
+            in_stack[u] = 1
+        elif Q[u]:  # middle of dfs
+            v = Q[u].pop()
+            dfs.append(u)
+            if vis[v] == -1:
+                pa[v] = u
+                dfs.append(v)
+            elif in_stack[v]:
+                low[u] = min(low[u], vis[v])
+        else:  # exit dfs
+            if pa[u] != -1:
+                low[pa[u]] = min(low[pa[u]], low[u])
+                low[pa[u]] = min(low[pa[u]], low[u])
+            if low[u] == vis[u]:
+                scc = []
+                while stack[-1] != u:
+                    scc.append(stack.pop())
+                scc.append(stack.pop())
+                j = len(sccV)
+                for x in scc:
+                    in_stack[x] = 0
+                    invV[x] = j
+                sccV.append(scc)
+    sccE = set()
+    for i in range(n):
+        for j in G[i]:
+            sccE.add((invV[i], invV[j]))
+    sccE = list(sccE)
+    return sccV, sccE
