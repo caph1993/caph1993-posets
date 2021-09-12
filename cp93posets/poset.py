@@ -46,9 +46,9 @@ class Relation(HelpIndex, WBools):
         self.show()
         print('Relation matrix:')
         print(self.rel.astype(int))
-        print('Reflexive?', self.is_reflexive())
-        print('Antisymmetric?', self.is_antisymmetric())
-        print('Transitive?', self.is_transitive())
+        print('Reflexive?', self.is_reflexive)
+        print('Antisymmetric?', self.is_antisymmetric)
+        print('Transitive?', self.is_transitive)
         return
 
     def show(self, labels=None, save=None):
@@ -65,30 +65,35 @@ class Relation(HelpIndex, WBools):
         Validation and boolean property methods
     '''
 
+    @cached_property
     def is_poset(self):
-        "Checks if the given relation is transitive, reflexive and antysimetric"
-        return (self.is_reflexive() and self.is_antisymmetric() and
-                self.is_transitive())
+        return (self.is_reflexive and self.is_antisymmetric and
+                self.is_transitive)
 
+    @cached_property
     def is_reflexive(self):
         rel = self.rel
         I = np.where(~rel[np.diag_indices_from(rel)])
-        reason = I and f'Not reflexive: rel[{I[0]},{I[0]}] is False'
-        return self._wbool(not I, reason)
+        why = len(I) and f'Not reflexive: rel[{I[0]},{I[0]}] is False'
+        return self._wbool(not len(I), why)
 
+    @cached_property
     def is_antisymmetric(self):
         rel = self.rel
         eye = np.identity(self.n, dtype=np.bool_)
         I = np.where(rel & rel.T & ~eye)
-        reason = I and f'Not antisymmetric: cycle {I[0]}<={I[1]}<={I[0]}'
-        return self._wbool(not I, reason)
+        why = len(I) and f'Not antisymmetric: cycle {I[0]}<={I[1]}<={I[0]}'
+        return self._wbool(not len(I), why)
 
+    @cached_property
     def is_transitive(self):
         rel = self.rel
         rel2 = np.matmul(rel, rel)
         I, J = np.where(((~rel) & rel2))
-        reason = I and f'Not transitive: rel[{I[0]},{J[0]}] is False but there is a path'
-        return self._wbool(not I, reason)
+        why = len(
+            I
+        ) and f'Not transitive: rel[{I[0]},{J[0]}] is False but there is a path'
+        return self._wbool(not len(I), why)
 
     @classmethod
     def validate(cls, rel: npBoolMatrix, expect_poset: bool = False):

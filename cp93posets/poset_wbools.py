@@ -5,13 +5,13 @@ from numpy.core.fromnumeric import nonzero
 
 class WBool:
     'Boolean that explains why_false and calls hook when failed to assert'
-    value: Any
+    value: bool
     why_false: str
     hook: Callable[[], Any]
 
     def __nonzero__(self):
         if hasattr(self.value, '__len__'):
-            return nonzero(len(self.value))
+            return nonzero(len(self.value))  # type:ignore
         return nonzero(self.value)
 
     def assert_explain(self):
