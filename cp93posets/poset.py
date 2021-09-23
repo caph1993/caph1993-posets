@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Callable, Iterable, List, Optional, Protocol, Sequence, Set, Tuple, TypeVar, Union
+from typing import Iterable, List, Optional, Sequence, Set, Tuple
 from cp93pytools.methodtools import cached_property
 from .poset_exceptions import (
     PosetExceptions,
@@ -9,22 +9,21 @@ from .help_index import HelpIndex
 from .poset_wbools import WBools
 import pyhash
 import numpy as np
-import numpy.typing as npt
 from collections import deque
 from itertools import product, chain
 from functools import reduce
 import time, sys
 import re
 
-npBoolMatrix = npt.NDArray[np.bool_]
-npUInt64Matrix = npt.NDArray[np.uint64]
+npBoolMatrix = np.ndarray
+npUInt64Matrix = np.ndarray
 
 
 class Relation(HelpIndex, WBools):
-    """
+    '''
     Class for boolean relation matrices intended mostly for asserting that
     a matrix relation can be used with the fully featured Poset class.
-    """
+    '''
 
     def __init__(self, rel: npBoolMatrix):
         shape = tuple(rel.shape)
@@ -125,7 +124,11 @@ class Relation(HelpIndex, WBools):
         return self.__class__(rel)
 
     def transitive_reduction(self, _assume_poset=False):
-        'Compute the transitive reduction of the given relation'
+        ''''
+        Compute the transitive reduction of the given relation
+        Raises an exception if the relation is not a poset
+        The output relation is also known as "Hasse diagram"
+        '''
         if not _assume_poset:
             self.is_poset.assert_explain()
         lt = self.rel.copy()
@@ -137,7 +140,7 @@ class Relation(HelpIndex, WBools):
 
 
 class Poset(HelpIndex, WBools):
-    """
+    '''
     Hashable object that represents an inmutable finite partial order.
     Uses a matrix and hashing is invariant under permutations.
 
@@ -146,7 +149,7 @@ class Poset(HelpIndex, WBools):
         - leq: read only less-or-equal boolean nxn matrix:
             leq[i,j]==True iff i <= j
         - labels: tuple of n strings. Only used for displaying
-    """
+    '''
 
     def __init__(self, leq: npBoolMatrix, labels: Sequence[str] = None,
                  _validate=False):
@@ -203,11 +206,15 @@ class Poset(HelpIndex, WBools):
 
     def show(self, f=None, method='auto', labels=None, save=None):
         '''
-        Use graphviz to display or save self (or the endomorphism f if given)
-        method only affects visualization of f. Can be
-          - auto, labels, arrows, labels_bottom, arrows_bottom.
-        The suffix _bottom hides the visualization of f[i] when f[i]=bottom.
-        Default will enable _bottom if self is a lattice and f preserves lub.
+        Use graphviz to display or save self as a Hasse diagram.
+        The argument "method" (string) only affects visualization
+        of the endomorphism f (if given). It can be
+          - arrows: blue arrow from each node i to f[i]
+          - labels: replace the label i of each node with f[i]
+          - labels_bottom: (no label at i if f[i]=bottom)
+          - arrows_bottom: (no arrow at i if f[i]=bottom)
+          - auto: 'arrows_bottom' if self is a lattice and f preserves lub. 'arrows' otherwise.
+        Hidding bottom is only allowed if self.bottom makes sense.
         '''
 
         methods = ('auto', 'labels', 'arrows', 'labels_bottom', 'arrows_bottom')
@@ -351,10 +358,19 @@ class Poset(HelpIndex, WBools):
         Graph structure methods
     '''
 
-    def subgraph(self, domain):
+    def _parse_domain(self, domain: List[int] | List[bool]) -> List[int]:
         n = self.n
+        assert len(domain) <= n, f'Invalid domain: {domain}'
+        if len(domain) == n > 0:
+            if isinstance(domain[0], bool):
+                domain = [i for i in range(n) if domain[i]]
+        else:
+            assert len(set(domain)) == len(domain), f'Invalid domain: {domain}'
+        return domain  # type:ignore
+
+    def subgraph(self, domain: List[int] | List[bool]):
+        domain = self._parse_domain(domain)
         m = len(domain)
-        assert len(set(domain)) == m <= n, f'Invalid domain: {domain}'
         leq = self.leq
         sub = np.zeros((m, m), dtype=bool)
         for i in range(m):
@@ -1597,7 +1613,7 @@ class Poset(HelpIndex, WBools):
     '''
 
     def help_verbose(self):
-        return """
+        return '''
         Except for n, leq and labels, all other attributes are
         lazy loaded and usually cached.
         
@@ -1634,7 +1650,7 @@ class Poset(HelpIndex, WBools):
             V.show(f)
             print(f)
         V.meta_O.show()
-        """
+        '''
 
     '''
     @section
@@ -1692,6 +1708,27 @@ class Poset(HelpIndex, WBools):
         bot_top = A[self.bottom, self.top]
         middle = ((d == 2) * (bot[:, None] * top[None, :])).sum()
         return 2 * bot_top + (middle if self.n > 2 else 0)
+
+    @classmethod
+    def all_lattices_adding(cls, n: int):
+        E = [pair for i in range(1, n - 1) for pair in [(0, i), (i, n - 1)]]
+        MN_poset = cls.from_up_edges(n, E)
+        num = {MN_poset: 0}
+        V = [MN_poset]
+        G = {0: []}
+        q = deque([MN_poset])
+        while q:
+            P = q.popleft()
+            for Q in P.iter_add_edge():
+                if Q not in num:
+                    num[Q] = len(V)
+                    V.append(Q)
+                    G[num[Q]] = []
+                    q.append(Q)
+                G[num[P]].append(num[Q])
+        E = [(i, j) for i in G for j in G[i]]
+        poset_of_posets = cls.from_up_edges(len(V), E)
+        return V, poset_of_posets
 
 
 def floyd_warshall(adj: npBoolMatrix, infinity: int) -> npUInt64Matrix:

@@ -20,7 +20,7 @@ class WBool:
                 pass
             raise AssertionError(self.why_false)
 
-    def __str__(self):
+    def __repr__(self):
         return 'True' if self else f'False: {self.why_false}'
 
 
