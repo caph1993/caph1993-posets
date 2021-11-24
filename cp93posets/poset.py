@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 from cp93pytools.methodtools import cached_property
 from .poset_exceptions import (
     NotUniqueBottomException,
@@ -16,6 +16,8 @@ from itertools import product, chain
 from functools import reduce
 import time, sys
 import re
+from pathlib import Path
+import json, os, warnings
 
 npBoolMatrix = np.ndarray
 npUInt64Matrix = np.ndarray
@@ -587,17 +589,27 @@ class Poset(HelpIndex, WBools):
 
     @cached_property
     def hash_elems(self):
+        return self._hash_elems(rounds=2)
+
+    def _hash_elems(self, rounds: int):
         mat = self.leq.astype(np.int64)
         with np.errstate(over='ignore'):
             H = self.hash_perm_invariant(mat)
-            for repeat in range(2):
+            for repeat in range(rounds):
                 mat += np.matmul(H[:, None], H[None, :])
                 H = self.hash_perm_invariant(mat)
         return H
 
     @cached_property
     def hash(self):
-        return self.__class__.hasher(sorted(self.hash_elems))
+        cls = self.__class__
+        elems = self.hash_elems
+        return cls.hasher(sorted(elems))
+
+    def _hash(self, rounds: int):
+        cls = self.__class__
+        elems = self._hash_elems(rounds=rounds)
+        return cls.hasher(sorted(elems))
 
     def __hash__(self):
         return self.hash
@@ -615,6 +627,8 @@ class Poset(HelpIndex, WBools):
         # Quick check:
         if self.n != other.n or hash(self) != hash(other):
             return None
+        if json.dumps(self.children) == json.dumps(other.children):
+            return True
 
         # Filter out some functions:
         n = self.n
@@ -696,7 +710,7 @@ class Poset(HelpIndex, WBools):
         Methods for atomic changes (grow-by-one inductively)
     # '''
 
-    # def _iter_velid_edges(self, redundant=False):
+    # def _iter_valid_edges(self, redundant=False):
     #     '''Edges that if added, the result is still a lattice'''
     #     assert self.is_lattice
     #     n = self.n
@@ -1564,36 +1578,124 @@ class Poset(HelpIndex, WBools):
         Methods for serialization
     '''
 
-    def to_literal(self, keys=None):
-        '''Json serializable representation of self that also stores
-        some expensive cached data'''
-        out = self.__dict__.copy()
-        for key, value in out.items():
-            if keys is None or key in keys:
-                if isinstance(value, np.ndarray):
-                    out[key] = {
-                        'dtype': get_dtype_string(value.dtype),
-                        'array': value.tolist()
-                    }
-        return out
+    @classmethod
+    def file_loader_and_saver(
+        cls,
+        directory: Union[Path, str],
+        keys: List[str] = None,
+        delete_other_keys=False,
+    ):
+        directory = Path(directory or os.getcwd())
+        try:
+            os.makedirs(directory)
+        except OSError:
+            pass
+
+        def save(poset: cls):
+            return poset.to_file(
+                directory=directory,
+                keys=keys,
+                delete_other_keys=delete_other_keys,
+            )
+
+        def load(hash: int):
+            return cls.from_file(hash, directory=directory)
+
+        def list_dir_hashes():
+            hashes: List[int] = []
+            for s in os.listdir(directory):
+                if '.' not in s:
+                    continue
+                base, ext = s.split('.', maxsplit=1)
+                if ext != 'json':
+                    continue
+                try:
+                    hashes.append(int(base))
+                except:
+                    pass
+            return hashes
+
+        return load, save, list_dir_hashes
+
+    def to_file(self, directory: Union[Path, str], keys: List[str] = None,
+                delete_other_keys=False):
+        '''
+        Saves the poset into a file named {hash}.json
+        and returns the hash.
+        The poset can be restored from disk by using
+        Poset.from_file(hash)
+        '''
+        keys = keys or []
+        hash = self.hash
+        cls = self.__class__
+        try:
+            poset = cls.from_file(hash, directory)
+        except:
+            poset = self
+        else:
+            if poset != self:
+                warning = 'You found a hash collision! Please inform the developers of caph1993-posets.'
+                try:
+                    file = './collision.log'
+                    info = dict(
+                        first_hash=poset.hash,
+                        second_hash=self.hash,
+                        first_children=poset.children,
+                        second_children=self.children,
+                    )
+                    with open(file, 'w') as f:
+                        json.dump(info, f, indent=2)
+                    warning += f'\nA log was written to {file}'
+                finally:
+                    warnings.warn(warning)
+                poset = self
+            else:
+                poset.__dict__.update(self.__dict__)
+                if delete_other_keys:
+                    for k in [*poset.__dict__]:
+                        if k not in keys:
+                            del poset.__dict__[k]
+        filename = f'{hash}.json'
+        directory = Path(directory or os.getcwd())
+        with open(directory / filename, 'w') as f:
+            serializable = poset.to_serializable(*keys)
+            json.dump(serializable, f, indent=2)
+        return hash
 
     @classmethod
-    def from_literal(cls, lit):
+    def from_file(cls, hash: int, directory: Union[Path, str]):
+        directory = Path(directory)
+        filename = f'{hash}.json'
+        with open(directory / filename) as f:
+            serializable = json.load(f)
+        poset = cls.from_serializable(serializable)
+        assert poset.hash == hash, (
+            f'Hash mismatch:\n{poset.hash} versus\n{hash}')
+        return poset
 
-        def read_numpy_array(dict_):
-            arr = np.array(dict_['array'], dtype=dict_['dtype'])
-            if arr.size == 0:
-                arr = arr.reshape((0, 0))
-            arr.flags.writeable = False
-            return arr
+    def to_serializable(self, *keys: str):
+        '''
+        Json serializable representation of self
+        that stores all cached data to avoid expensive
+        recalculation of cached methods in keys
+        '''
+        data = self.__dict__
+        data = {k: data[k] for k in keys if k in data[k]}
+        data['_labels'] = self._labels
+        data['json_children'] = json.dumps(
+            self.children,
+            indent=None,
+        )  # Json just to save some newlines in file output
+        return data
 
-        V = cls(read_numpy_array(lit.pop('leq')))
-        for key, value in lit.items():
-            if isinstance(value,
-                          dict) and 'dtype' in value and 'array' in value:
-                value = read_numpy_array(value)
-            V.__dict__[key] = value
-        return V
+    @classmethod
+    def from_serializable(cls, serializable: Any):
+        obj = serializable
+        children = json.loads(obj.pop('json_children'))
+        _labels = obj.pop('_labels')
+        poset = cls.from_children(children, labels=_labels)
+        poset.__dict__.update(**obj)
+        return poset
 
     '''
     @section
