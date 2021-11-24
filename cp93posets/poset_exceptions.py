@@ -1,15 +1,21 @@
-from typing import Callable, Any
+from typing import Callable, Any, List
 from cp93pytools.methodtools import cached_property
 
 
 class PosetException(Exception):
     message = 'Dummy exception for the poset class'
 
-    def __init__(self, *hooks: Callable[[], Any], message=None, args=None):
-        self.hooks = hooks
+    def __init__(
+        self,
+        *hooks: Callable[[], Any],
+        message=None,
+        args=None,
+    ):
+        if hooks is not None:
+            self.hooks = [*hooks]
         if message is not None:
             self.message = message
-        if args != None:
+        if args is not None:
             self.args = args
 
     def __str__(self):  # When raised to the top
@@ -74,6 +80,10 @@ class NotDistributiveException(PosetException):
     message = 'Given lattice is not distributive'
 
 
+class NotModularException(PosetException):
+    message = 'Given lattice is not distributive'
+
+
 class PosetExceptions:
     PosetException = PosetException
     NotPosetException = NotPosetException
@@ -89,3 +99,4 @@ class PosetExceptions:
     NotDistributiveException = NotDistributiveException
     NoBottomsException = NoBottomsException
     NoTopsException = NoTopsException
+    NotModularException = NotModularException

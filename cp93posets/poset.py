@@ -2,11 +2,13 @@ from __future__ import annotations
 from typing import Iterable, List, Optional, Sequence, Set, Tuple
 from cp93pytools.methodtools import cached_property
 from .poset_exceptions import (
+    NotUniqueBottomException,
     PosetExceptions,
     NotLatticeException,
 )
 from .help_index import HelpIndex
 from .poset_wbools import WBools
+from .algorithm_random_poset_czech import random_lattice as random_lattice_czech
 import pyhash
 import numpy as np
 from collections import deque
@@ -451,6 +453,9 @@ class Poset(HelpIndex, WBools):
             if self.n > 0:
                 self.lub
                 self.bottom
+        except NotUniqueBottomException as e:
+            reason = f"Not unique bottom: {self.bottoms}"
+            return self._wbool(False, reason)
         except NotLatticeException as e:
             i, j = e.args
         else:
@@ -1065,7 +1070,7 @@ class Poset(HelpIndex, WBools):
 
     '''
     @section
-        Optimizations for distributive lattices
+        Methods and optimizations for distributive lattices
     '''
 
     @cached_property
@@ -1118,6 +1123,42 @@ class Poset(HelpIndex, WBools):
 
         k_independent = [num(k) for k in range(m)]
         return reduce(lambda a, b: a * b, k_independent, 1)
+
+    '''
+    @section
+        Methods and optimizations for modular lattices
+    '''
+
+    @cached_property
+    def is_modular(self):
+        return self.explain_non_modular is None
+
+    @cached_property
+    def explain_non_modular(self):
+        'Find i, j, k that violate modularity. None otherwise'
+        n = self.n
+        lub = self.lub
+        glb = self.glb
+        problem = lambda i, j, k: (
+            f'Non modular lattice:\n'
+            f'{i} leq {k} and '
+            f'{i} glb ({j} lub {k}) = {i} glb {lub[j,k]} = '
+            f'{glb[i,lub[j,k]]} != {lub[glb[i,j],glb[i,k]]} = '
+            f'{glb[i,j]} lub {glb[i,k]} = ({i} glb {j}) lub ({i} glb {k})')
+        for i in range(n):
+            diff = glb[i, lub] != lub[np.ix_(glb[i, :], glb[i, :])]
+            if diff.any():
+                issues: List[Tuple[int, int]]
+                issues = list(zip(*np.where(diff)))  # type:ignore
+                for j, k in issues:
+                    if lub[i, k] == k:
+                        return problem(i, j, k)
+        return None
+
+    def assert_modular(self):
+        if not self.is_modular:
+            hook = lambda: print(self.explain_non_modular)
+            raise PosetExceptions.NotModularException(hook)
 
     '''
     @section
@@ -1579,6 +1620,64 @@ class Poset(HelpIndex, WBools):
         assert hasattr(method, '__call__'), f'Not callable method: {method}'
         setattr(cls, method.__name__, property(method))
 
+    '''
+    @section
+        Random generation of posets 
+    '''
+
+    @classmethod
+    def random_poset(cls, n: int, p: float, seed=None):
+        '''
+        Generates a random poset.
+        All posets (modulo labels) have positive probability of being generated.
+        If p is close to 0, the poset is very sparse.
+        If p is close to 1, the poset is very dense.
+        '''
+        R = np.random.RandomState(seed=seed)
+        rel = np.zeros((n, n), dtype=bool)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if R.random() < p:
+                    rel[i, j] = 1
+        for i in range(n):
+            rel[i, i] = 1
+        rel.flags.writeable = False
+        leq = Relation(rel).transitive_closure().rel
+        poset = cls(leq, _validate=False)
+        return poset
+
+    @classmethod
+    def random_lattice_czech(cls, n: int, seed=None):
+        '''
+        Description: http://ka.karlin.mff.cuni.cz/jezek/093/random.pdf
+        '''
+        lub = random_lattice_czech(n, seed)
+        rel = (lub <= np.arange(n)[None, :])
+        rel.flags.writeable = False
+        poset = cls(rel, _validate=True)
+        try:
+            if poset.n > 0:
+                poset.bottom
+        except NotUniqueBottomException:
+            # Fix bottoms:
+            bottoms = poset.bottoms
+            bot = bottoms[0]
+            rel.flags.writeable = True
+            for i in bottoms:
+                rel[bot, i] = True
+            rel.flags.writeable = False
+            rel = Relation(rel).transitive_closure().rel
+            poset = cls(rel, _validate=True)
+            poset.assert_lattice()
+        return poset
+
+    # @classmethod
+    # def random_modular(cls):
+    #     return
+
+    # @classmethod
+    # def random_distributive(cls):
+    #     return
     '''
     @section
         Methods related with entropy
