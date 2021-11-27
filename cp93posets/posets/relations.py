@@ -116,7 +116,7 @@ class Relation(HelpIndex, WBools):
 
     def transitive_reduction(self, _assume_poset=False):
         ''''
-        Compute the transitive reduction of the given relation
+        Compute in O(n^3) the transitive reduction of the given relation
         Raises an exception if the relation is not a poset
         The output relation is also known as "Hasse diagram"
         '''

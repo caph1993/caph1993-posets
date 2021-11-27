@@ -1,8 +1,8 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from typing import Sequence, Tuple
 if TYPE_CHECKING:
     from .posets import Poset
+from typing import Sequence, Tuple
 
 
 def graphviz(

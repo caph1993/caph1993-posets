@@ -3,6 +3,7 @@ import numpy as np
 
 npBoolMatrix = np.ndarray
 npUInt64Matrix = np.ndarray
+npInt64Array = np.ndarray
 
 _get_dtype_string = re.compile(
     r'(<class \'numpy\.(.*)\'>)|(<class \'(.*?)\'>)|(.*)')

@@ -8,7 +8,7 @@ twine upload dist/*
 
 setup(
     name='caph1993-posets',
-    version='2.0.14',
+    version='2.1.0',
     description='Toolbox for finite posets and lattices',
     url='https://github.com/caph1993/caph1993-posets',
     author='Carlos Pinzón',
@@ -19,7 +19,7 @@ setup(
     ],
     install_requires=[
         'numpy',
-        'caph1993-pytools',
+        'caph1993-pytools>=0.2.37',
         'pyhash',
         'pydotplus',
     ],

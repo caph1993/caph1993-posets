@@ -1,8 +1,9 @@
 from __future__ import annotations
 from typing import Any, Iterable, List, Optional, Sequence, Set, Tuple, Union, cast
 from cp93pytools.methodtools import cached_property
+
 #from numpy.random.mtrand import permutation
-from ..iterators import product_list
+from ..iterators import cartesian
 from ..poset_exceptions import (
     NotUniqueBottomException,
     PosetExceptions,
@@ -14,18 +15,23 @@ from ..algorithm_random_poset_czech import random_lattice as random_lattice_czec
 import pyhash
 import numpy as np
 from collections import deque
-from itertools import chain
 from functools import reduce
 import time
-from pathlib import Path
-import json, os, warnings
 from .relations import Relation
-from . import graphviz
-from ..numpy_types import npBoolMatrix, npUInt64Matrix
+from ..numpy_types import npBoolMatrix
 from ..algorithm_floyd_warshall import floyd_warshall
-from ..iterators import isomorphism_candidates
 from ..outfile import Outfile
-from cp93pytools.methodtools import copy_docs_and_signature
+
+from . import (
+    graphviz,
+    description,
+    graph_methods,
+    lattice_methods,
+    hash_methods,
+    grow_methods,
+    endomorphisms,
+)
+from cp93pytools.methodtools import implemented_at
 
 
 class Poset(HelpIndex, WBools):
@@ -33,80 +39,49 @@ class Poset(HelpIndex, WBools):
     Hashable object that represents an inmutable finite partial order.
     Uses a matrix and hashing is invariant under permutations.
 
+    Run print(Poset.usage) for details and usage examples.
+
     The main attributes (always present) are:
-        - n: size of the poset. The elements of the poset are range(n)
-        - leq: read only less-or-equal boolean nxn matrix:
-            leq[i,j]==True iff i <= j
-        - labels: tuple of n strings. Only used for displaying
+        n: size of the poset.
+            The elements of the poset are range(n)
+        leq: read only less-or-equal boolean nxn matrix:
+            leq[i,j] is True if and only "i <= j" in the poset order
+        _labels: optional sequence of n strings.
+            Only used for displaying
     '''
 
     def __init__(self, leq: npBoolMatrix, labels: Sequence[str] = None,
                  _validate=False):
-        'Assumes that leq is indeed a valid poset relation'
-        Relation.validate(leq, expect_poset=_validate)
-        self.n = n = leq.shape[0]
-        self.leq = leq
+        rel = Relation(leq)
         if labels is not None:
             m = len(labels)
-            assert m == n, f'{m} labels found. Expected {n}'
+            assert m == rel.n, f'{m} labels found. Expected {rel.n}'
             non = [l for l in labels if not isinstance(l, str)]
             assert not non, f'non-string label found: {non[0]}'
+        self.n = rel.n
+        self.leq = leq
         self._labels = labels
+        if _validate:
+            self.assert_is_poset()
 
-    @cached_property
+    def assert_is_poset(self):
+        rel = Relation(self.leq)
+        return rel.is_poset.assert_explain()
+
+    @property
     def labels(self):
         return self._labels or tuple(f'{i}' for i in range(self.n))
 
     '''
     @section
-        Display methods
-    '''
-
-    def describe(self):
-        self.show()
-        print('Relation matrix:')
-        print(self.leq.astype(int))
-        print('Covers:', self)
-        print(f'Lattice? {self.is_lattice}')
-        if self.is_lattice:
-            print(f'Distributive? {self.is_distributive}')
-        else:
-            print(f'# bottoms: {len(self.bottoms)}')
-            print(f'# tops: {len(self.tops)}')
-        return
-
-    @cached_property
-    def name(self):
-        'Compact and readable representation of self based on parents'
-        n = self.n
-        P = self.parents
-        topo = self.toposort
-        Pstr = lambda i: ','.join(map(str, P[i]))
-        it = (f'{i}<{Pstr(i)}' for i in topo if P[i])
-        name = ' : '.join((f'{n}', *it))
-        labels = ''
-        if self.labels != tuple(range(n)):
-            labels = ', '.join(self.labels)
-            labels = f' with labels {labels}'
-        return f'P({name}){labels}'
-
-    def __repr__(self):
-        return self.name
-
-    @copy_docs_and_signature(graphviz.show)
-    def show(self, *args, **kwargs):
-        return graphviz.show(self, *args, **kwargs)
-
-    '''
-    @section
-        Cover relation methods 
+        Fundamental methods 
     '''
 
     @cached_property
     def child(self):
         '''
         nxn boolean matrix: transitive reduction of the poset.
-        child[i,j]==True iff j covers i (with no elements inbetween)
+        child[i,j] == True iff j covers i (with no elements inbetween)
         '''
         red = Relation(self.leq).transitive_reduction(_assume_poset=True)
         return red.rel
@@ -125,6 +100,32 @@ class Poset(HelpIndex, WBools):
         child = self.child
         return [[j for j in range(n) if child[i, j]] for i in range(n)]
 
+    @cached_property
+    def dist(self):
+        'Matrix of shortest distance from i upwards to j through child'
+        cls = self.__class__
+        child = self.child
+        return cls.child_to_dist(child, assume_poset=True)
+
+    '''
+    @section
+        Display methods
+    '''
+
+    @implemented_at(graphviz.show)
+    def show(self):
+        ...
+
+    def __repr__(self):
+        return self.name
+
+    @cached_property
+    def name(self):
+        return description.name(self)
+
+    def describe(self):
+        return description.describe(self)
+
     '''
     @section
         Interface methods
@@ -141,7 +142,7 @@ class Poset(HelpIndex, WBools):
         return cls.from_children(children, labels)
 
     @classmethod
-    def from_children(cls, children, labels=None):
+    def from_children(cls, children: List[List[int]], labels=None):
         'create Poset from list: children[i] = list of covers of i'
         n = len(children)
         child = np.zeros((n, n), dtype=bool)
@@ -149,7 +150,7 @@ class Poset(HelpIndex, WBools):
             for ch in children[pa]:
                 child[ch, pa] = True
         child.flags.writeable = False
-        dist = cls.child_to_dist(child, assume_poset=False)
+        dist = cls.child_to_dist(child, assume_poset=True)
         dist.flags.writeable = False
         leq = dist < n
         leq.flags.writeable = False
@@ -193,9 +194,8 @@ class Poset(HelpIndex, WBools):
         return tuple(np.min([dist[i, :] for i in bottoms], axis=0))
 
     @cached_property
-    def dist(self):
-        'Matrix of shortest distance from i upwards to j through child'
-        return self.__class__.child_to_dist(self.child, assume_poset=True)
+    def height(self):
+        return max(self.heights)
 
     @classmethod
     def child_to_dist(cls, child: npBoolMatrix, assume_poset=False):
@@ -210,84 +210,37 @@ class Poset(HelpIndex, WBools):
         Graph structure methods
     '''
 
-    def _parse_domain(self, domain: List[int] | List[bool]) -> List[int]:
-        n = self.n
-        assert len(domain) <= n, f'Invalid domain: {domain}'
-        if len(domain) == n > 0:
-            if isinstance(domain[0], bool):
-                domain = [i for i in range(n) if domain[i]]
-        else:
-            assert len(set(domain)) == len(domain), f'Invalid domain: {domain}'
-        return domain  # type:ignore
-
-    def subgraph(self, domain: List[int] | List[bool]):
-        domain = self._parse_domain(domain)
-        m = len(domain)
-        leq = self.leq
-        sub = np.zeros((m, m), dtype=bool)
-        for i in range(m):
-            for j in range(m):
-                sub[i, j] = leq[domain[i], domain[j]]
-        sub.flags.writeable = False
-        labels = tuple(self.labels[i] for i in domain)
-        return self.__class__(sub, labels=labels)
+    @implemented_at(graph_methods.subgraph)
+    def subgraph(self):
+        ...
 
     @cached_property
     def toposort(self):
-        n = self.n
-        G = self.parents
-        child = self.child
-        indeg = [child[:, i].sum() for i in range(n)]
-        topo = []
-        q = deque([i for i in range(n) if indeg[i] == 0])
-        while q:
-            u = q.popleft()
-            topo.append(u)
-            for v in G[u]:
-                indeg[v] -= 1
-                if indeg[v] == 0:
-                    q.append(v)
-        assert len(topo) == n, f'Not antisymmetric, cycle found'
-        return tuple(topo)
+        return graph_methods.toposort(self)
 
     @cached_property
     def toporank(self):
-        return tuple(self.__class__.inverse_permutation(self.toposort))
-
-    @classmethod
-    def inverse_permutation(cls, perm: Sequence[int]):
-        n = len(perm)
-        rank = [-1] * n
-        for i in range(n):
-            rank[perm[i]] = i
-        return rank
+        return graph_methods.toporank(self)
 
     @cached_property
     def independent_components(self):
-        'Graph components if all edges were bidirectional'
-        n = self.n
-        cmp = self.leq | self.leq.T
-        G = [[j for j in range(n) if cmp[i, j]] for i in range(n)]
-        color = np.ones(n, dtype=int) * -1
+        return graph_methods.independent_components(self)
 
-        def component(i: int):
-            q = deque([i])
-            found = []
-            while q:
-                u = q.popleft()
-                for v in G[u]:
-                    if color[v] != color[u]:
-                        color[v] = color[u]
-                        q.append(v)
-                found.append(u)
-            return found
+    @cached_property
+    def bottoms(self):
+        return graph_methods.bottoms(self)
 
-        comps = []
-        for i in range(n):
-            if color[i] == -1:
-                color[i] = len(comps)
-                comps.append(component(i))
-        return comps
+    @cached_property
+    def tops(self):
+        return graph_methods.tops(self)
+
+    @cached_property
+    def non_bottoms(self):
+        return graph_methods.non_bottoms(self)
+
+    @cached_property
+    def non_tops(self):
+        return graph_methods.non_tops(self)
 
     '''
     @section
@@ -299,511 +252,191 @@ class Poset(HelpIndex, WBools):
 
     @cached_property
     def is_lattice(self):
-        try:
-            if self.n > 0:
-                self.lub
-                self.bottom
-        except NotUniqueBottomException as e:
-            reason = f"Not unique bottom: {self.bottoms}"
-            return self._wbool(False, reason)
-        except NotLatticeException as e:
-            i, j = e.args
-        else:
-            return self._wbool(True)
-        n = self.n
-        leq = self.leq
-        above = [k for k in range(n) if leq[i, k] and leq[j, k]]
-        below = [k for k in range(n) if leq[k, i] and leq[k, j]]
-        if not above:
-            reason = f'Not a lattice: {i} lub {j} => (no common ancestor)'
-            return self._wbool(False, reason)
-        if not below:
-            reason = f'Not a lattice: {i} glb {j} => (no common descendant)'
-            return self._wbool(False, reason)
-        lub = min(above, key=lambda k: sum(leq[:, k]))
-        glb = max(below, key=lambda k: sum(leq[:, k]))
-        for x in above:
-            if not leq[lub, x]:
-                reason = f'Not a lattice: {i} lub {j} => {lub} or {x}'
-                return self._wbool(False, reason)
-        for x in below:
-            if not leq[x, glb]:
-                reason = f'Not a lattice: {i} glb {j} => {glb} or {x}'
-                return self._wbool(False, reason)
-        return self._wbool(False, 'Unknown reason')
-
-    @cached_property
-    def lub(self):
-        'matrix of i lub j, i.e. i join j'
-        n = self.n
-        leq = self.leq
-        lub_id = {tuple(leq[i, :]): i for i in range(n)}
-        lub = np.zeros((n, n), int)
-        for i in range(n):
-            for j in range(n):
-                above = tuple(leq[i, :] & leq[j, :])
-                if above not in lub_id:
-                    self._lub_issue = (i, j)
-                    raise NotLatticeException(args=(i, j))
-                lub[i, j] = lub_id[above]
-        lub.flags.writeable = False
-        return lub
-
-    @cached_property
-    def bottoms(self):
-        'bottom elements of the poset'
-        n = self.n
-        nleq = self.leq.sum(axis=0)
-        return [i for i in range(n) if nleq[i] == 1]
-
-    @cached_property
-    def non_bottoms(self):
-        'non-bottom elements of the poset'
-        n = self.n
-        nleq = self.leq.sum(axis=0)
-        return [i for i in range(n) if nleq[i] > 1]
+        return lattice_methods.is_lattice(self)
 
     @cached_property
     def bottom(self):
-        'unique bottom element of the Poset. Throws if not present'
-        bottoms = self.bottoms
-        if not bottoms:
-            raise PosetExceptions.NoBottomsException()
-        if len(bottoms) > 1:
-            hook = lambda: f'Multiple bottoms found: {bottoms}'
-            raise PosetExceptions.NotUniqueBottomException(hook)
-        return bottoms[0]
-
-    def set_lub(self, *elems: int):
-        if not elems:
-            return self.bottom
-        lub = self.lub
-        acum = elems[0]
-        for elem in elems[1:]:
-            acum = lub[acum, elem]
-        return acum
-
-    @cached_property
-    def tops(self):
-        'top elements of the poset'
-        n = self.n
-        nleq = self.leq.sum(axis=0)
-        return [i for i in range(n) if nleq[i] == n]
-
-    @cached_property
-    def non_tops(self):
-        'non-top elements of the poset'
-        n = self.n
-        nleq = self.leq.sum(axis=0)
-        return [i for i in range(n) if nleq[i] < n]
-
-    # @cached_property
-    # def has_unique_bottom(self):
-    #     unique = len(self.bottoms) == 1
-    #     reason = not unique and f'Multiple bottoms: {self.bottoms}'
-    #     return self._wbool(unique, reason)
+        return lattice_methods.bottom(self)
 
     @cached_property
     def top(self):
-        'unique top element of the Poset. Throws if not present'
-        tops = self.tops
-        if not tops:
-            raise PosetExceptions.NoTopsException()
-        if len(tops) > 1:
-            hook = lambda: f'Multiple tops found: {tops}'
-            raise PosetExceptions.NotUniqueTopException(hook)
-        return tops[0]
-
-    def set_glb(self, *elems: int):
-        if not elems:
-            return self.top
-        glb = self.glb
-        acum = elems[0]
-        for elem in elems[1:]:
-            acum = glb[acum, elem]
-        return acum
+        return lattice_methods.top(self)
 
     @cached_property
-    def irreducibles(self):
-        n = self.n
-        children = self.children
-        return [i for i in range(n) if len(children[i]) == 1]
+    def lub(self):
+        return lattice_methods.lub(self)
 
     @cached_property
     def glb(self):
-        geq = self.leq.T
-        return self.__class__(geq).lub
+        return lattice_methods.glb(self)
+
+    @implemented_at(lattice_methods.set_lub)
+    def set_lub(self):
+        ...
+
+    @implemented_at(lattice_methods.set_glb)
+    def set_glb(self):
+        ...
+
+    @cached_property
+    def irreducibles(self):
+        return lattice_methods.irreducibles(self)
 
     @cached_property
     def irreducibles_leq(self):
-        '''Irreducibles below (leq) x for each x'''
-        Rn = range(self.n)
-        I = self.irreducibles
-        leq = self.leq
-        return [[i for i in I if leq[i, x]] for x in Rn]
+        return lattice_methods.irreducibles_leq(self)
 
     '''
     @section
         Hashing and isomorphisms
     '''
 
+    def __hash__(self):
+        return self.hash
+
+    def __eq__(self, other: Poset):
+        'Equality up to isomorphism, i.e. up to reindexing'
+        return self.find_isomorphism(other) is not None
+
     _hasher = pyhash.xx_64(seed=0)
 
     @classmethod
-    def hasher(cls, ints):
-        'Fast hash that is consistent across runs independently of PYTHONHASHSEED'
-        return cls._hasher(
-            str(ints)[1:-1]) >> 1  # Prevent uint64->int64 overflow
-
-    def hash_perm_invariant(self, mat):
-        HASH = self.__class__.hasher
-        h = lambda l: HASH(sorted(l))
-        a = [HASH((h(mat[:, i]), h(mat[i, :]))) for i in range(self.n)]
-        return np.array(a, dtype=int)
+    def hasher(cls, ints: Sequence[int]):
+        '''
+        Fast numeric hashing function that is consistent across runs.
+        Independent of PYTHONHASHSEED unlike Python's hash.
+        The output space is range(2**63), i.e. 1e18 approximately 
+        '''
+        uint64hash = cls._hasher(str(ints)[1:-1])
+        int64hash = uint64hash >> 1  # Prevent overflow
+        return int64hash
 
     @cached_property
     def hash_elems(self):
         return self._hash_elems(rounds=2, salt=0)
 
-    def _hash_elems(self, rounds: int, salt: int):
-        mat = self.leq.astype(np.int64)
-        with np.errstate(over='ignore'):
-            H = self.hash_perm_invariant(salt + mat)
-            for repeat in range(rounds):
-                mat += np.matmul(H[:, None], H[None, :])
-                H = self.hash_perm_invariant(salt + mat)
-        return H
+    @implemented_at(hash_methods._hash_elems)
+    def _hash_elems(self):
+        ...
 
     @cached_property
     def hash(self):
-        cls = self.__class__
-        elems = self.hash_elems
-        return cls.hasher(sorted(elems))
+        return self.__class__.hasher(sorted(self.hash_elems))
 
-    def _hash(self, rounds: int):
-        cls = self.__class__
-        elems = self._hash_elems(rounds=rounds, salt=0)
-        return cls.hasher(sorted(elems))
-
-    def __hash__(self):
-        return self.hash
-
-    def __eq__(self, other):
-        'Equality up to isomorphism, i.e. up to reindexing'
-        N_NO_HASH_COLLISIONS_TESTED = 10
-        if self.n == other.n <= N_NO_HASH_COLLISIONS_TESTED:
-            eq = hash(self) == hash(other)
-        else:
-            eq = self.find_isomorphism(other) is not None
-        return eq
-
-    def find_isomorphism(self, other: Poset):
-        # Quick check:
-        if self.n != other.n or hash(self) != hash(other):
-            return None
-        # if json.dumps(self.children) == json.dumps(other.children):
-        #     return True
-        # Filter out some functions:
-        n = self.n
-        Ah = self._hash_elems(rounds=4, salt=0)
-        Ah += self._hash_elems(rounds=4, salt=1)
-        Bh = other._hash_elems(rounds=4, salt=0)
-        Bh += other._hash_elems(rounds=4, salt=1)
-        # Find isomorphism among remaining functions
-        A = self.leq
-        B = other.leq
-        IJ = [(i, j) for i in range(n) for j in range(n)]
-
-        for f in isomorphism_candidates([*Ah], [*Bh]):
-            is_isomorphism = all(A[i, j] == B[f[i], f[j]] for i, j in IJ)
-            if is_isomorphism:
-                return f
-        return None
-
-    def reindex(self, f, inverse=False, reset_labels=False):
-        'Reindexed copy of self such that i is to self as f[i] to out'
-        'If inverse==True, then f[i] is to self as i to out'
-        n = self.n
-        assert len(f) == n and sorted(set(f)) == list(
-            range(n)), f'Invalid permutation {f}'
-        if inverse:
-            inv = [0] * n
-            for i in range(n):
-                inv[f[i]] = i
-            f = inv
-        leq = self.leq
-        out = np.zeros_like(leq)
-        for i in range(n):
-            for j in range(n):
-                out[f[i], f[j]] = leq[i, j]
-        out.flags.writeable = False
-        out_labels: Optional[Sequence[str]]
-        if reset_labels:
-            out_labels = None
-        else:
-            out_labels = ['' for i in range(n)]
-            for i in range(n):
-                out_labels[f[i]] = self.labels[i]
-            out_labels = tuple(out_labels)
-        return self.__class__(out, labels=out_labels)
-
-    def relabel(self, labels=None):
-        'copy of self with different labels'
-        return self.__class__(self.leq, labels=labels)
+    @implemented_at(hash_methods.find_isomorphism)
+    def find_isomorphism(self):
+        ...
 
     @cached_property
+    @implemented_at(hash_methods.canonical)
     def canonical(self):
-        'equivalent poset with enumerated labels and stable order'
-        n = self.n
-        group_by = {h: [] for h in range(n)}
-        for i in range(n):
-            group_by[self.heights[i]].append(i)
-        topo = []
-        rank = [-1] * n
-        G = self.parents
-        R = self.children
-        nleq = self.leq.sum(axis=0)
-        ngeq = self.leq.sum(axis=1)
-        order = list(zip(nleq, ngeq, self.hash_elems, self.labels, range(n)))
+        ...
 
-        def key(i):
-            t = tuple(sorted((rank[i] for i in R[i])))
-            return (t, len(G[i]), order[i])
+    @implemented_at(hash_methods.reindex)
+    def reindex(self):
+        ...
 
-        for h in range(n):
-            for i in sorted(group_by[h], key=key):
-                rank[i] = len(topo)
-                topo.append(i)
-        leq = self.reindex(rank).leq
-        return self.__class__(leq, labels=None)
+    def relabel(self, labels: Sequence[str] = None):
+        'copy of self with different labels'
+        return self.__class__(self.leq, labels=labels)
 
     '''
     @section
         Methods for atomic changes (grow-by-one inductively)
-    # '''
+    '''
 
-    # def _iter_valid_edges(self, redundant=False):
-    #     '''Edges that if added, the result is still a lattice'''
-    #     assert self.is_lattice
-    #     n = self.n
-    #     leq = self.leq
-    #     lt = leq.copy()
-    #     lt[np.diag_indices_from(lt)] = 0
-    #     gt = lt.T
-    #     for i, j in product_list(range(n), repeat=2):
-    #         if leq[j, i]:
-    #             valid = False
-    #         elif lt[i, j]:
-    #             valid = redundant
-    #         elif nocmp[i, j]:
-    #             Xij = np.flatnonzero(lt[j] & ~lt[j])
-    #             Yij = np.flatnonzero(gt[i] & ~gt[j])
-    #             valid = not any(leq[x, y] for x, y in product(Xij, Yij))
-    #         if valid:
-    #             yield i, j
-    #     return
+    @classmethod
+    def all_latices(cls, max_size: int):
+        return list(cls.iter_all_latices(max_size))
 
-    def _add_edge(self, i, j, assume_poset=False):
-        "Grow self by adding one edge 'i leq j'"
-        leq = self.leq
-        new_leq = leq + np.matmul(leq[:, i:i + 1], leq[j:j + 1, :])
-        new_leq.flags.writeable = False
-        obj = self.__class__(new_leq, _validate=False)
-        if not assume_poset:
-            _ = obj.toposort
-        return obj
-
-    def _add_node(self, i, j, assume_poset=False):
-        "Grow self by adding one node just between i and j"
-        n = self.n
-        leq = self.leq
-        out = np.zeros((n + 1, n + 1), bool)
-        out[:-1, :-1] = leq
-        out[n, n] = True
-        out[:-1, :-1] += np.matmul(leq[:, i:i + 1], leq[j:j + 1, :])
-        out[n, :-1] = leq[j, :]
-        out[:-1, n] = leq[:, i]
-        out.flags.writeable = False
-        obj = self.__class__(out)
-        if not assume_poset:
-            _ = obj.toposort
-        return obj
+    @classmethod
+    def iter_all_latices(cls, max_size: int):
+        return grow_methods.iter_all_latices(cls, max_size=max_size)
 
     @cached_property
+    @implemented_at(grow_methods.forbidden_pairs)
     def forbidden_pairs(self):
-        "Pairs (i,j) that break lub uniqueness or partial order structure"
-        n = self.n
-        leq = self.leq
-        joi = self.lub
-        nocmp = ~(leq + leq.T)
+        ...
 
-        def f(a, b):
-            if leq[b, a]:
-                return True
-            if leq[a, b]:
-                return False
-            X = [x for x in range(n) if leq[x, a]]
-            Y = [y for y in range(n) if ~leq[b, y] and nocmp[y, a]]
-            return any(nocmp[joi[x, y], joi[b, y]] for y in Y for x in X)
-
-        fb = np.array([[f(i, j) for j in range(n)] for i in range(n)],
-                      dtype=bool)
-        return fb
-
+    @implemented_at(grow_methods.iter_add_edge)
     def iter_add_edge(self):
-        "Grow self by adding one edge"
-        n = self.n
-        leq = self.leq
-        fb = self.forbidden_pairs
-        vis = set()
-        h = self.hash_elems
-        for i, j in product_list(range(n), repeat=2):
-            if not fb[i, j] and not leq[i, j] and (h[i], h[j]) not in vis:
-                yield self._add_edge(i, j, assume_poset=True)
-        return
+        ...
 
+    @implemented_at(grow_methods.iter_add_node)
     def iter_add_node(self):
-        "Grow self by adding one node"
-        n = self.n
-        leq = self.leq
-        fb = self.forbidden_pairs
-        vis = set()  # Don't repeat isomorphical connections
-        h = self.hash_elems
-        for i, j in product_list(range(n), repeat=2):
-            if not fb[i, j] and not (h[i], h[j]) in vis:
-                yield self._add_node(i, j, assume_poset=True)
-        return
+        ...
 
-    @classmethod
-    def iter_all_latices(cls, max_size):
-        q = deque([cls.from_children(x) for x in [[], [[]], [[], [0]]]])
-        vis = set()
-        while q:
-            U = q.popleft()
-            yield U.canonical
-            it = U.iter_add_node() if U.n < max_size else iter([])
-            for V in chain(U.iter_add_edge(), it):
-                if V not in vis:
-                    vis.add(V)
-                    q.append(V)
+    @implemented_at(grow_methods._add_edge)
+    def _add_edge(self):
+        ...
 
-    @classmethod
-    def all_latices(cls, max_size):
-        return list(cls.iter_all_latices(max_size))
+    @implemented_at(grow_methods._add_node)
+    def _add_node(self):
+        ...
 
     '''
     @section
         Methods for all endomorphisms
     '''
 
+    @implemented_at(endomorphisms.iter_f_all)
     def iter_f_all(self):
-        'all endomorphisms'
-        return product_list(range(self.n), repeat=self.n)
+        ...
 
     @cached_property
+    @implemented_at(endomorphisms.num_f_all)
     def num_f_all(self):
-        return self.n**self.n
+        ...
 
+    @implemented_at(endomorphisms.iter_f_all_bottom)
     def iter_f_all_bottom(self):
-        'all endomorphisms f with f[bottom]=bottom'
-        n = self.n
-        if n > 0:
-            options = [range(n) if i != self.bottom else [i] for i in range(n)]
-            for f in product_list(*options):
-                yield f
-        return
+        ...
 
     @cached_property
+    @implemented_at(endomorphisms.num_f_all_bottom)
     def num_f_all_bottom(self):
-        return self.n**(self.n - 1)
+        ...
 
     '''
     @section
         Methods for all monotonic endomorphisms
     '''
 
-    def f_is_monotone(self, f, domain=None):
-        'check if f is monotone over domain'
-        n = self.n
-        domain = range(n) if domain is None else domain
-        leq = self.leq
-        for i in domain:
-            for j in domain:
-                if leq[i, j] and not leq[f[i], f[j]]:
-                    return False
-        return True
+    @implemented_at(endomorphisms.f_is_monotone)
+    def f_is_monotone(self):
+        ...
 
+    @implemented_at(endomorphisms.iter_f_monotone_bruteforce)
     def iter_f_monotone_bruteforce(self):
-        'all monotone functions'
-        for f in self.iter_f_all():
-            if self.f_is_monotone(f):
-                yield f
-        return
+        ...
 
+    @implemented_at(endomorphisms.iter_f_monotone_bottom_bruteforce)
     def iter_f_monotone_bottom_bruteforce(self):
-        'all monotone functions with f[bottom]=bottom'
-        for f in self.iter_f_all_bottom():
-            if self.f_is_monotone(f):
-                yield f
-        return
+        ...
 
+    @implemented_at(endomorphisms.iter_f_monotone)
     def iter_f_monotone(self):
-        'all monotone functions'
-        f = [None] * self.n
-        yield from self.iter_f_monotone_restricted(_f=f)
+        ...
 
+    @implemented_at(endomorphisms.iter_f_lub_bruteforce)
     def iter_f_lub_bruteforce(self):
-        'all space functions. Throws if no bottom'
-        for f in self.iter_f_monotone_bottom():
-            if self.f_is_lub_pairs(f):
-                yield f
-        return
+        ...
 
-    def iter_f_monotone_restricted(self, domain=None, _f=None):
-        'generate all monotone functions f : domain -> self, padding non-domain with None'
-        n = self.n
-        leq = self.leq
-        geq_list = [[j for j in range(n) if leq[i, j]] for i in range(n)]
-        f = [None for i in range(n)] if _f is None else _f
-        topo, children = self._toposort_children(domain)
-        yield from self._iter_f_monotone_restricted(f, topo, children, geq_list)
+    @implemented_at(endomorphisms.iter_f_monotone_restricted)
+    def iter_f_monotone_restricted(self):
+        ...
 
-    def _iter_f_monotone_restricted(self, f, topo, children,
-                                    geq_list: List[List[int]]):
-        n = self.n
-        m = len(topo)
-        set_lub = self.set_lub
-        lub_f = lambda elems: set_lub(*(f(i) for i in elems))
+    @implemented_at(endomorphisms._iter_f_monotone_restricted)
+    def _iter_f_monotone_restricted(self):
+        ...
 
-        def backtrack(i):
-            'f[topo[j]] is fixed for all j<i. Backtrack f[topo[k]] for all k>=i, k<m'
-            if i == m:
-                yield f
-            else:
-                for k in geq_list[lub_f(children[i])]:
-                    f[topo[i]] = k
-                    yield from backtrack(i + 1)
+    @implemented_at(endomorphisms._toposort_children)
+    def _toposort_children(self):
+        ...
 
-        yield from backtrack(0)
-
-    def _toposort_children(self, domain):
-        'Compute a toposort for domain and the children lists filtered for domain'
-        'j in out.children[i] iff j in out.topo and j is children of out.topo[i]'
-        n = self.n
-        D = range(n) if domain is None else domain
-        topo = [i for i in self.toposort if i in D]
-        sub = self.subgraph(topo)
-        children = [[topo[j] for j in l] for l in sub.children]
-        return topo, children
-
+    @implemented_at(endomorphisms.iter_f_monotone_bottom)
     def iter_f_monotone_bottom(self):
-        'all monotone functions with f[bottom]=bottom'
-        if not self.n:
-            return
-        f: List[Optional[int]] = [None] * self.n
-        f[self.bottom] = self.bottom
-        domain = [i for i in range(self.n) if i != self.bottom]
-        yield from self.iter_f_monotone_restricted(domain=domain, _f=f)
+        ...
 
     '''
     @section
@@ -811,168 +444,72 @@ class Poset(HelpIndex, WBools):
     '''
 
     @cached_property
+    @implemented_at(endomorphisms.irreducible_components)
     def irreducible_components(self):
-        'components of join irreducibles in toposort order and children lists for each component'
-        n = self.n
-        if n <= 1:  # no join irreducibles at all
-            return (0, [], [])
-        irr = self.irreducibles
-        sub = self.subgraph(irr)
-        subcomps = sub.independent_components
-        m = len(subcomps)
-        irrcomps = [[irr[j] for j in subcomps[i]] for i in range(m)]
-        m_topo, m_children = zip(
-            *(self._toposort_children(irrcomps[i]) for i in range(m)))
-        return m, m_topo, m_children
+        ...
 
-    def _interpolate_funcs(self, funcs, domain) -> Iterable[List[int]]:
-        'extend each f in funcs outside domain using f[j]=lub(f[i] if i<=j and i in domain)'
-        n = self.n
-        lub = self.lub
-        leq = self.leq
-        bot = self.bottom
-        no_domain = [i for i in range(n) if i not in domain]
-        dom_leq = [[i for i in domain if leq[i, j]] for j in range(n)]
-        lub_f = (lambda a, b: lub[a, b])
-        for f in funcs:
-            for j in no_domain:
-                f[j] = reduce(lub_f, (f[x] for x in dom_leq[j]), bot)
-            yield f
+    @implemented_at(endomorphisms._interpolate_funcs)
+    def _interpolate_funcs(self):
+        ...
 
-    def iter_f_irreducibles_monotone_bottom(self) -> Iterable[List[int]]:
-        'all functions given by f[non_irr]=lub(f[irreducibles] below non_irr)'
-        if self.n == 0:
-            return
-        n = self.n
-        leq = self.leq
-        geq_list = [[j for j in range(n) if leq[i, j]] for i in range(n)]
-        m, m_topo, m_children = self.irreducible_components
-        f = [None for i in range(n)]
+    @implemented_at(endomorphisms.iter_f_irreducibles_monotone_bottom)
+    def iter_f_irreducibles_monotone_bottom(self):
+        ...
 
-        def backtrack(i):
-            if i == m:
-                yield f
-            else:
-                for _ in self._iter_f_monotone_restricted(
-                        f, m_topo[i], m_children[i], geq_list):
-                    yield from backtrack(i + 1)
-
-        funcs = backtrack(0)
-        yield from self._interpolate_funcs(funcs, self.irreducibles)
-
+    @implemented_at(endomorphisms.iter_f_irreducibles_monotone)
     def iter_f_irreducibles_monotone(self):
-        'all functions given by f[non_irr]=lub(f[irreducibles] below non_irr) and'
-        'f[bottom] = any below or equal to glb(f[irreducibles])'
-        n = self.n
-        if n == 0:
-            return
-        glb = self.glb
-        leq = self.leq
-        below = [[i for i in range(n) if leq[i, j]] for j in range(n)]
-        bottom = self.bottom
-        irreducibles = self.irreducibles
-        for f in self.iter_f_irreducibles_monotone_bottom():
-            _glb_f = (lambda acum, b: glb[acum, f[b]])
-            glb_f = lambda elems: reduce(_glb_f, elems, self.top)
-            for i in below[glb_f(irreducibles)]:
-                f[bottom] = i
-                yield f
+        ...
 
     '''
     @section
         Methods for endomorphisms that preserve lub
     '''
 
-    def f_is_lub(self, f, domain=None):
-        '''
-        check if f preserves lubs for sets:
-            f_is_lub_pairs and f[bottom]=bottom.
-        Throws if no bottom
-        '''
-        n = self.n
-        if n == 0 or (domain is not None and len(domain) <= 1):
-            return True
-        bot = self.bottom
-        if f[bot] != bot or (domain is not None and bot not in domain):
-            return False
-        return self.f_is_lub_pairs(f, domain)
+    @implemented_at(endomorphisms.f_is_lub)
+    def f_is_lub(self):
+        ...
 
-    def f_is_lub_pairs(self, f, domain=None):
-        '''
-        check if f preserves lubs for pairs:
-            f[lub[i,j]]=lub[f[i],f[j]]
-        '''
-        n = self.n
-        domain = range(n) if domain is None else domain
-        lub = self.lub
-        for i in domain:
-            for j in domain:
-                if f[lub[i, j]] != lub[f[i], f[j]]:
-                    return False
-        return True
+    @implemented_at(endomorphisms.f_is_lub_pairs)
+    def f_is_lub_pairs(self):
+        ...
 
+    @implemented_at(endomorphisms.iter_f_lub_pairs_bruteforce)
     def iter_f_lub_pairs_bruteforce(self):
-        'all functions that statisfy f_is_lub_pairs'
-        for f in self.iter_f_monotone():
-            if self.f_is_lub_pairs(f):
-                yield f
-        return
+        ...
 
+    @implemented_at(endomorphisms.iter_f_lub_pairs)
     def iter_f_lub_pairs(self):
-        'all functions that statisfy f_is_lub'
-        it = self.iter_f_irreducibles_monotone()
-        if self.is_distributive:
-            yield from it
-        else:
-            for f in it:
-                if self.f_is_lub_pairs(f):
-                    yield f
+        ...
 
+    @implemented_at(endomorphisms.iter_f_lub)
     def iter_f_lub(self):
-        'all functions that preserve lubs for sets'
-        it = self.iter_f_irreducibles_monotone_bottom()
-        if self.is_distributive:
-            yield from it
-        else:
-            for f in it:
-                if self.f_is_lub_pairs(f):
-                    yield f
+        ...
 
     @cached_property
+    @implemented_at(endomorphisms.num_f_lub_pairs)
     def num_f_lub_pairs(self):
-        return self.count_f_lub_pairs_bruteforce()
+        ...
 
+    @implemented_at(endomorphisms.count_f_lub_pairs_bruteforce)
     def count_f_lub_pairs_bruteforce(self):
-        return sum(1 for f in self.iter_f_lub_pairs())
+        ...
 
     @cached_property
+    @implemented_at(endomorphisms.num_f_lub)
     def num_f_lub(self):
-        return self.count_f_lub()
+        ...
 
+    @implemented_at(endomorphisms.count_f_lub)
     def count_f_lub(self):
-        if self.is_distributive:
-            num = self.count_f_lub_distributive()
-        else:
-            num = self.count_f_lub_bruteforce()
-        return num
+        ...
 
+    @implemented_at(endomorphisms.count_f_lub_bruteforce)
     def count_f_lub_bruteforce(self):
-        return sum(1 for f in self.iter_f_lub())
+        ...
 
-    def f_is_lub_of_irreducibles(self, f, domain=None):
-        '''
-        check if f satisfies for all x in range(n) that
-            f(x) == self.set_lub(*[f[i] for i in I(x)])
-        where
-            I(x) = list of irreducibles below (leq) x
-        '''
-        n = self.n
-        set_lub = self.set_lub
-        I = self.irreducibles_leq
-        for a in range(n):
-            if f[a] != set_lub(*I[a]):
-                return False
-        return True
+    @implemented_at(endomorphisms.f_is_lub_of_irreducibles)
+    def f_is_lub_of_irreducibles(self):
+        ...
 
     '''
     @section
@@ -1019,12 +556,17 @@ class Poset(HelpIndex, WBools):
         leq = self.leq
         geq_list = [[j for j in range(n) if leq[i, j]] for i in range(n)]
         m, m_topo, m_children = self.irreducible_components
-        f = [None for i in range(n)]
+        f = [None for _ in range(n)]
+        f = cast(endomorphisms.PartialEndomorphism, f)
 
-        def num(i):
+        def num(i: int):
             'num of monotone functions restricted to domain k_topo[i]'
-            it = self._iter_f_monotone_restricted(f, m_topo[i], m_children[i],
-                                                  geq_list)
+            it = self._iter_f_monotone_restricted(
+                f,
+                m_topo[i],
+                m_children[i],
+                geq_list,
+            )
             return sum(1 for _ in it)
 
         k_independent = [num(k) for k in range(m)]
@@ -1238,13 +780,12 @@ class Poset(HelpIndex, WBools):
         labels = [None] * (n * m)
         labels = cast(List[str], labels)
         G = [[] for i in range(n * m)]
-        for i in range(n):
-            for j in range(m):
-                for k in self.children[i]:
-                    G[i + j * n].append(k + j * n)
-                for k in other.children[j]:
-                    G[i + j * n].append(i + k * n)
-                labels[i + j * n] = f'({self.labels[i]},{other.labels[j]})'
+        for i, j in cartesian(n, m):
+            for k in self.children[i]:
+                G[i + j * n].append(k + j * n)
+            for k in other.children[j]:
+                G[i + j * n].append(i + k * n)
+            labels[i + j * n] = f'({self.labels[i]},{other.labels[j]})'
         return cls.from_children(G, labels=labels)
 
     def or_poset(self, other: Poset):
@@ -1468,155 +1009,6 @@ class Poset(HelpIndex, WBools):
 
     '''
     @section
-        Methods for serialization
-    '''
-
-    @classmethod
-    def file_loader_and_saver(
-        cls,
-        directory: Union[Path, str],
-        keys: List[str] = None,
-        delete_other_keys=False,
-    ):
-        directory = Path(directory or os.getcwd())
-        try:
-            os.makedirs(directory)
-        except OSError:
-            pass
-
-        def save(poset: cls):
-            return poset.to_file(
-                directory=directory,
-                keys=keys,
-                delete_other_keys=delete_other_keys,
-            )
-
-        def load(hash: int):
-            return cls.from_file(hash, directory=directory)
-
-        def list_dir_hashes():
-            hashes: List[int] = []
-            for s in os.listdir(directory):
-                if '.' not in s:
-                    continue
-                base, ext = s.split('.', maxsplit=1)
-                if ext != 'json':
-                    continue
-                try:
-                    hashes.append(int(base))
-                except:
-                    pass
-            return hashes
-
-        return load, save, list_dir_hashes
-
-    def to_file(self, directory: Union[Path, str], keys: List[str] = None,
-                delete_other_keys=False):
-        '''
-        Saves the poset into a file named {hash}.json
-        and returns the hash.
-        The poset can be restored from disk by using
-        Poset.from_file(hash)
-        '''
-        keys = keys or []
-        hash = self.hash
-        cls = self.__class__
-        try:
-            poset = cls.from_file(hash, directory)
-        except:
-            poset = self
-        else:
-            if poset != self:
-                warning = 'You found a hash collision! Please inform the developers of caph1993-posets.'
-                try:
-                    file = './collision.log'
-                    info = dict(
-                        first_hash=poset.hash,
-                        second_hash=self.hash,
-                        first_children=poset.children,
-                        second_children=self.children,
-                    )
-                    with open(file, 'w') as f:
-                        json.dump(info, f, indent=2)
-                    warning += f'\nA log was written to {file}'
-                finally:
-                    warnings.warn(warning)
-                poset = self
-            else:
-                poset.__dict__.update(self.__dict__)
-                if delete_other_keys:
-                    for k in [*poset.__dict__]:
-                        if k not in keys:
-                            del poset.__dict__[k]
-        filename = f'{hash}.json'
-        directory = Path(directory or os.getcwd())
-        with open(directory / filename, 'w') as f:
-            serializable = poset.to_serializable(*keys)
-            json.dump(serializable, f, indent=2)
-        return hash
-
-    @classmethod
-    def from_file(cls, hash: int, directory: Union[Path, str]):
-        directory = Path(directory)
-        filename = f'{hash}.json'
-        with open(directory / filename) as f:
-            serializable = json.load(f)
-        poset = cls.from_serializable(serializable)
-        assert poset.hash == hash, (
-            f'Hash mismatch:\n{poset.hash} versus\n{hash}')
-        return poset
-
-    def to_serializable(self, *keys: str):
-        '''
-        Json serializable representation of self
-        that stores all cached data to avoid expensive
-        recalculation of cached methods in keys
-        '''
-        data = self.__dict__
-        data = {k: data[k] for k in keys if k in data[k]}
-        data['_labels'] = self._labels
-        data['json_children'] = json.dumps(
-            self.children,
-            indent=None,
-        )  # Json just to save some newlines in file output
-        return data
-
-    @classmethod
-    def from_serializable(cls, serializable: Any):
-        obj = serializable
-        children = json.loads(obj.pop('json_children'))
-        _labels = obj.pop('_labels')
-        poset = cls.from_children(children, labels=_labels)
-        poset.__dict__.update(**obj)
-        return poset
-
-    '''
-    @section
-        Methods for interactive definition of other methods
-    '''
-
-    @classmethod
-    def set_method(cls, method):
-        assert hasattr(method, '__call__'), f'Not callable method: {method}'
-        setattr(cls, method.__name__, method)
-
-    @classmethod
-    def set_classmethod(cls, method):
-        assert hasattr(method, '__call__'), f'Not callable method: {method}'
-        setattr(cls, method.__name__, classmethod(method))
-
-    @classmethod
-    def set_staticmethod(cls, method):
-        assert hasattr(method, '__call__'), f'Not callable method: {method}'
-        setattr(cls, method.__name__, staticmethod(method))
-
-    @classmethod
-    def set_property(cls, method):
-        assert hasattr(method, '__call__'), f'Not callable method: {method}'
-        setattr(cls, method.__name__, property(method))
-
-    '''
-    @section
         Random generation of posets 
     '''
 
@@ -1650,11 +1042,7 @@ class Poset(HelpIndex, WBools):
         rel = (lub <= np.arange(n)[None, :])
         rel.flags.writeable = False
         poset = cls(rel, _validate=True)
-        try:
-            if poset.n > 0:
-                poset.bottom
-        except NotUniqueBottomException:
-            # Fix bottoms:
+        if len(poset.bottoms) >= 2:  # Collapse bottoms
             bottoms = poset.bottoms
             bot = bottoms[0]
             rel.flags.writeable = True
@@ -1706,46 +1094,45 @@ class Poset(HelpIndex, WBools):
         Help and examples
     '''
 
-    def help_verbose(self):
-        return '''
-        Except for n, leq and labels, all other attributes are
-        lazy loaded and usually cached.
-        
-        Conventions:
-            - child[i,j]==True iff j covers i (with no elements inbetween)
-            - children[j] = [i for i in range(n) if leq[i,j]]
-            - parents[i] = [j for j in range(n) if leq[i,j]]
+    usage = '''
+    Except for n, leq and _labels, all other attributes are
+    lazy loaded and usually cached.
+    
+    Conventions:
+        - child[i,j]==True iff j covers i (with no elements inbetween)
+        - children[j] = [i for i in range(n) if leq[i,j]]
+        - parents[i] = [j for j in range(n) if leq[i,j]]
 
-            For lattices:
-                - lub[i,j] is the least upper bound for i and j.
-                - glb[i,j] is the greatest lower bound for i and j
-        
-        Requires external packages:
-            - numpy
-            - cached_property
-            - pyhash
-            - pydotplus (which needs graphviz 'dot' program)
+        For lattices:
+            - lub[i,j] is the least upper bound for i and j.
+            - glb[i,j] is the greatest lower bound for i and j
+    
+    Requires external packages:
+        - numpy
+        - cached_property
+        - pyhash
+        - pydotplus (and graphviz 'dot' program)
 
-        Why pyhash?
-            Because it is stable (like hashlib) and fast (like hash).
-            hashlib is not adequate because it adds an unnecessary computation footrint.
-            hash(tuple(...)) is not adequate because it yields different results across
-            several runs unless PYTHONHASHSEED is set prior to execution.
-        
-        Examples:
+    Why pyhash?
+        Because it is stable (like hashlib) and fast (like hash).
+        hashlib is not adequate because it adds an unnecessary computation footrint.
+        hash(tuple(...)) is not adequate because it yields different
+        results across several runs unless PYTHONHASHSEED is set
+        prior to execution.
+    
+    Examples:
 
-        V = Poset.from_parents([[1,2],[],[],[1]])
-        V.show()
-        V = (V|Poset.total(1)).meta_O
-        V.show()
-        print(V.is_distributive)
-        print(V.num_f_lub_pairs)
-        for f in V.iter_f_lub_pairs_bruteforce():
-            V.show(f)
-            print(f)
-        V.meta_O.show()
-        '''
-
+    V = Poset.from_parents([[1,2],[],[],[1]])
+    V.show()
+    V = (V|Poset.total(1)).meta_O
+    V.show()
+    print(V.is_distributive)
+    print(V.num_f_lub_pairs)
+    for f in V.iter_f_lub_pairs_bruteforce():
+        V.show(f)
+        print(f)
+    V.meta_O.show()
+    '''
     '''
     @section
         Unclassified methods that will probably dissapear in the future
