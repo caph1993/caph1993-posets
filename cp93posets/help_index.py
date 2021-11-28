@@ -1,4 +1,6 @@
 from __future__ import annotations
+from types import FunctionType
+from typing import cast
 from cp93pytools.methodtools import cached_property
 import inspect
 import re
@@ -11,9 +13,11 @@ class HelpIndex:
     '''
 
     @classmethod
-    def help_index(cls, show_all=False, silent=False):
+    def help_index(cls, show_all=False, silent=False, show_docs=True):
         # Inspect the source code
         src = inspect.getsource(cls)
+        D = vars(cls)
+
         re_sect = r'(?:\n *(@section(?:.|[ \n])+?)(?:\'\'\'|\"\"\"))'
         re_meth = r'(?:def +(.*?\( *self.*?\)):)'
         re_cmeth = r'(?:def +(.*?\( *cls.*?\)):)'
@@ -28,15 +32,30 @@ class HelpIndex:
             if f:
                 methodsOf[section] = methodsOf.get(section, [])
                 name = f[:f.index('(')]
-                if not hasattr(cls, name):
+
+                if name not in D:
+                    #print('skipped', name)
                     continue
-                func = getattr(cls, name)
+                func = D[name]
                 doc = func.__doc__ or ''
-                doc = '\n'.join(l.strip() for l in doc.split('\n'))
+                header = ''
+
                 if isinstance(func, cached_property):
-                    full_f = f'@cached_property\ndef {f}:'
+                    header = f'@cached_property\n'
+                    func = func._method
+                    doc = func.__doc__ or ''
+                elif isinstance(func, property):
+                    header = f'@property\n'
+                    func = func.fget
+                    doc = func.__doc__ or ''
+
+                if isinstance(func, FunctionType):
+                    sig = inspect.signature(func)
+                    full_f = f'{header}def {name}{sig}:'
                 else:
-                    full_f = f'def {f}:'
+                    full_f = f'{header}def {f}:'
+
+                doc = '\n'.join(l.strip() for l in doc.split('\n'))
                 methodsOf[section].append((full_f, doc))
             else:
                 sections.append((section, methodsOf.get(section, [])))
@@ -54,8 +73,11 @@ class HelpIndex:
                     f = '\n'.join(' ' * 4 + s for s in f.split('\n'))
                     docs = '\n'.join(' ' * 8 + s for s in docs.split('\n'))
                     out.append(f'{f}\n')
-                    out.append(f'{docs}\n')
-                    if docs.strip():
+                    if show_docs:
+                        out.append(f'{docs}\n')
+                        if docs.strip():
+                            out.append('\n')
+                    else:
                         out.append('\n')
         out = ''.join(out)
 
