@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Sequence, Tuple, List, Union, Dict, Any
 from pathlib import Path
 import json, os, warnings
-from cp93pytools.easySQLite import SqliteStore, SqliteTable
+from cp93pytools.easySqlite import SqliteTable
 
 from ..poset_wbools import WBools
 from .posets import Poset
@@ -26,13 +26,13 @@ def warn_collision(a: Poset, b: Poset):
     return
 
 
-class PosetStore:
+class PosetStore(SqliteTable):
 
     def __init__(self, file: Union[Path, str]):
-        self.table = SqliteTable(file, 'posets').indexed_by(['hash'])
-        self.table.db.execute('''
+        super().__init__(file, 'posets')
+        self.db.execute('''
             CREATE TABLE IF NOT EXISTS posets(
-                hash integer PRIMARY KEY,
+                hash integer PRIMARY KEY NOT NULL,
                 children text NOT NULL,
                 n integer NOT NULL,
                 is_lattice boolean,
@@ -41,22 +41,22 @@ class PosetStore:
                 is_semimodular bool boolean
             )
         ''')
-        self.table.db.execute('''
+        self.db.execute('''
             CREATE INDEX IF NOT EXISTS posets_n ON posets (n)
         ''')
 
     def __getitem__(self, hash: int):
-        poset = self.get(hash)
+        poset = self.get_poset(hash=hash)
         if poset is None:
             raise KeyError(hash)
         return poset
 
-    def get(self, hash: int):
-        poset, _ = self._get(hash)
+    def get_poset(self, hash: int):
+        poset, _ = self._get_poset(hash=hash)
         return poset
 
-    def _get(self, hash: int):
-        data = self.table.get_dict(hash)
+    def _get_poset(self, hash: int):
+        data = self.get_dict(hash=hash)
         if data is None:
             return None, None
         return self._parse_data(data)
@@ -73,17 +73,21 @@ class PosetStore:
                 poset.__dict__[k] = v
         return poset, data
 
-    columns = [
+    table_columns = [
         'is_lattice',
         'is_distributive',
         'is_modular',
         'is_semimodular',
     ]
 
-    def save(self, poset: Poset):
-        current, current_data = self._get(hash(poset))
-        data = {'n': poset.n, 'children': json.dumps(poset.children)}
-        for k in self.columns:
+    def save_poset(self, poset: Poset):
+        current, current_data = self._get_poset(hash(poset))
+        data = {
+            'n': poset.n,
+            'children': json.dumps(poset.children),
+            'hash': hash(poset),
+        }
+        for k in self.table_columns:
             if k in poset.__dict__:
                 data[k] = bool(poset.__dict__[k])
 
@@ -91,21 +95,19 @@ class PosetStore:
             if current != poset:
                 warn_collision(current, poset)
             data = {**current_data, **data}
-
-        self.table.set_row(hash(poset), **data)
+        self.update(data, hash=hash(poset))
         return hash(poset)
 
     def keys(self):
-        return [s for s in self.table.column('hash')]
+        return [s for s in self.column('hash')]
 
     def random_posets(self, limit: int):
-        dicts = self.table.random_dicts(None, limit)
+        dicts = self.random_dicts(limit=limit)
         return [self._parse_data(data)[0] for data in dicts]
 
     def random_poset(self):
         return self.random_posets(1)[0]
 
     def filter(self, limit: int = None, **where):
-        suffix = None if limit is None else f'LIMIT {limit}'
-        dicts = self.table.dicts_where_equal(None, suffix=suffix, **where)
+        dicts = self.dicts(limit=limit, **where)
         return [self._parse_data(data)[0] for data in dicts]

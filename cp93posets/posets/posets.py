@@ -662,13 +662,10 @@ class Poset(HelpIndex, WBools):
         return tuple(self.labels[x] for x in nodes)
 
     def _meta_mat(self, F, leq_F):
-        n = self.n
-        leq = self.leq
         m = len(F)
         mat = np.zeros((m, m), dtype=bool)
-        for i in range(m):
-            for j in range(m):
-                mat[i, j] = leq_F(F[i], F[j])
+        for i, j in cartesian(m, m):
+            mat[i, j] = leq_F(F[i], F[j])
         mat.flags.writeable = False
         return mat
 
