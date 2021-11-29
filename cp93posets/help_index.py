@@ -37,17 +37,18 @@ class HelpIndex:
                     #print('skipped', name)
                     continue
                 func = D[name]
-                doc = func.__doc__ or ''
                 header = ''
 
                 if isinstance(func, cached_property):
                     header = f'@cached_property\n'
                     func = func._method
-                    doc = func.__doc__ or ''
                 elif isinstance(func, property):
                     header = f'@property\n'
                     func = func.fget
-                    doc = func.__doc__ or ''
+                elif isinstance(func, classmethod):
+                    header = f'@classmethod\n'
+                    func = func.__func__
+                doc = func.__doc__ or ''
 
                 if isinstance(func, FunctionType):
                     sig = inspect.signature(func)
