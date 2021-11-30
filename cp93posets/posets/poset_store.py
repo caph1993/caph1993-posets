@@ -56,7 +56,7 @@ class PosetStore(SqliteTable):
         return poset
 
     def _get_poset(self, hash: int):
-        data = self.get_dict(hash=hash)
+        data = self.where(hash=hash).get_dict()
         if data is None:
             return None, None
         return self._parse_data(data)
@@ -95,19 +95,19 @@ class PosetStore(SqliteTable):
             if current != poset:
                 warn_collision(current, poset)
             data = {**current_data, **data}
-        self.update(data, hash=hash(poset))
+        self.where(hash=hash(poset)).update(**data)
         return hash(poset)
 
     def keys(self):
         return [s for s in self.column('hash')]
 
     def random_posets(self, limit: int):
-        dicts = self.random_dicts(limit=limit)
+        dicts = self.random_dicts(limit)
         return [self._parse_data(data)[0] for data in dicts]
 
     def random_poset(self):
         return self.random_posets(1)[0]
 
     def filter(self, limit: int = None, **where):
-        dicts = self.dicts(limit=limit, **where)
+        dicts = self.where(**where).limit(limit).dicts()
         return [self._parse_data(data)[0] for data in dicts]
