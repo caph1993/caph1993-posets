@@ -406,6 +406,15 @@ class Poset(HelpIndex, WBools):
     def f_is_monotone(self):
         ...
 
+    @implemented_at(endomorphisms.f_meet)
+    def f_meet(self):
+        ...
+
+    @cached_property
+    @implemented_at(endomorphisms._as_external_lattice)
+    def _as_external_lattice(self):
+        ...
+
     @implemented_at(endomorphisms.iter_f_monotone_bruteforce)
     def iter_f_monotone_bruteforce(self):
         ...

@@ -6,6 +6,7 @@ if TYPE_CHECKING:
 
 from typing import List, Sequence
 from ..iterators import product_list
+from . import external_methods
 
 from typing import TypeVar
 
@@ -50,6 +51,27 @@ def f_is_monotone(self: Poset, f, domain=None):
             if leq[i, j] and not leq[f[i], f[j]]:
                 return False
     return True
+
+
+def _as_external_lattice(self: Poset):
+    '''
+    returns the equivalent "Lattice" object for self
+    to be able to run methods from external_methods
+    '''
+    mat = external_methods.lattice_from_covers(self.children)
+    return external_methods.Lattice(mat)
+
+
+def f_meet(self: Poset, f1: Sequence[int], f2: Sequence[int]):
+    '''
+    Compute the greatest lower bound of two functions
+    in the space of join endomorphisms.
+    '''
+    return external_methods.delta_foo_cvrs(
+        self._as_external_lattice,
+        [f1, f2],
+        self.children,
+    )
 
 
 def iter_f_monotone_bruteforce(self: Poset):

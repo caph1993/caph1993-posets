@@ -99,7 +99,7 @@ class PosetStore(SqliteTable):
         return hash(poset)
 
     def keys(self):
-        return [s for s in self.column('hash')]
+        return self.column('hash', type=int)
 
     def random_posets(self, limit: int):
         dicts = self.random_dicts(limit)

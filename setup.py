@@ -1,14 +1,9 @@
 from setuptools import setup, find_packages
-'''
-To upload:
-python3 setup.py check
-python3 setup.py sdist
-twine upload dist/*
-'''
+from cp93posets import VERSION
 
 setup(
     name='caph1993-posets',
-    version='2.1.4',
+    version=VERSION,
     description='Toolbox for finite posets and lattices',
     url='https://github.com/caph1993/caph1993-posets',
     author='Carlos Pinzón',
@@ -17,7 +12,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         'numpy',
-        'caph1993-pytools>=0.4.1',
+        'caph1993-pytools>=0.4.2',
         'pyhash',
         'pydotplus',
     ],
