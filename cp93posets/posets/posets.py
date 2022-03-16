@@ -50,8 +50,8 @@ class Poset(HelpIndex, WBools):
             Only used for displaying
     '''
 
-    def __init__(self, leq: npBoolMatrix, labels: Sequence[str] = None,
-                 _validate=False):
+    def __init__(self, leq: npBoolMatrix,
+                 labels: Optional[Sequence[str]] = None, _validate=False):
         rel = Relation(leq)
         if labels is not None:
             m = len(labels)
@@ -336,7 +336,7 @@ class Poset(HelpIndex, WBools):
     def reindex(self):
         ...
 
-    def relabel(self, labels: Sequence[str] = None):
+    def relabel(self, labels: Optional[Sequence[str]] = None):
         'copy of self with different labels'
         return self.__class__(self.leq, labels=labels)
 

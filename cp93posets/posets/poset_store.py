@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Sequence, Tuple, List, Union, Dict, Any
+from typing import Optional, Sequence, Tuple, List, Union, Dict, Any
 from pathlib import Path
 import json, os, warnings
 from cp93pytools.easySqlite import SqliteTable
@@ -108,6 +108,6 @@ class PosetStore(SqliteTable):
     def random_poset(self):
         return self.random_posets(1)[0]
 
-    def filter(self, limit: int = None, **where):
+    def filter(self, limit: Optional[int] = None, **where):
         dicts = self.where(**where).limit(limit).dicts()
         return [self._parse_data(data)[0] for data in dicts]

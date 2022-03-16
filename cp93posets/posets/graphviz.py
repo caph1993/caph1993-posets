@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from .posets import Poset
 from typing import Sequence, Tuple
@@ -9,8 +9,8 @@ def graphviz(
     n: int,
     edges: Sequence[Tuple[int, int]],
     labels: Sequence[str],
-    blue_edges: Sequence[Tuple[int, int]] = None,
-    save: str = None,
+    blue_edges: Optional[Sequence[Tuple[int, int]]] = None,
+    save: Optional[str] = None,
 ):
     'Show graph using graphviz. blue edges are extra edges'
     from pydotplus import graph_from_edges
@@ -19,12 +19,13 @@ def graphviz(
     color = '#555555' if blue_edges is None else '#aaaaaa'
 
     g = graph_from_edges([], directed=True)
-    g.set_rankdir('BT')  # type:ignore
+    g.set_rankdir('TB')  # type:ignore
     for i in range(n):
         style = {}
         g.add_node(Node(i, label=f'"{labels[i]}"', **style))
     for i, j in edges:
-        style = {'dir': 'none', 'color': color}
+        #style = {'dir': 'none', 'color': color}
+        style = {'color': color}
         g.add_edge(Edge(i, j, **style))
     if blue_edges is not None:
         for i, j in blue_edges:
@@ -94,6 +95,6 @@ def show(
                     gr[f[i]].append(i)
             labels = [','.join(map(str, l)) for l in gr]
 
-    edges = [(i, j) for i in range(n) for j in range(n) if child[i, j]]
+    edges = [(i, j) for i in range(n) for j in range(n) if child[j, i]]
     graphviz(n, edges, labels=labels, blue_edges=blue_edges, save=save)
     return
